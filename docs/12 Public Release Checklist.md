@@ -48,3 +48,15 @@ Research OS/local-branding/
 ```
 
 For public distribution, publish the Docker image from clean source and let colleagues keep their own local `Projects` folder.
+
+## License Before Public
+
+Before making the repository public, choose a license and add a `LICENSE` or
+`LICENSE.md` file at the repository root.
+
+For Research OS, the most likely choices are:
+
+- MIT License for the simplest permissive open source release.
+- Apache License 2.0 for a permissive release with more explicit patent terms.
+
+See `docs/13 License And Terms.md` before changing repository visibility.

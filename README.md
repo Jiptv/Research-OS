@@ -56,6 +56,7 @@ Before making architectural or implementation changes, always read the relevant 
 | **09 Project Handover** | Original project background and handover context for future contributors. |
 | **11 Colleague Setup** | How to share Research OS with colleagues by zip or GitHub Container Registry. |
 | **12 Public Release Checklist** | What to check before publishing Research OS more broadly. |
+| **13 License And Terms** | License and terms options before making Research OS public. |
 | **FILE_STRUCTURE** | Practical guide to the folders, researcher actions, and AI work files. |
 
 If implementation conflicts with the documentation, update the documentation first.

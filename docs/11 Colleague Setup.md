@@ -1,0 +1,190 @@
+# Colleague Setup
+
+This guide is for teammates who want to run Research OS locally.
+
+For the shortest non-technical setup guide, read:
+
+```text
+START_HERE.md
+```
+
+That guide also explains how to add the `UX Research` folder as a local
+project/workspace in Codex or Claude.
+
+Research OS stores research files on the local machine. Docker only runs the dashboard.
+
+Expected local shape:
+
+```text
+UX Research/
+├── Research OS/
+└── Projects/
+```
+
+The dashboard launcher creates `Projects/` next to `Research OS/` if it does
+not exist yet.
+
+## Option A: Zip Package
+
+Use this when you want to send one simple file.
+
+1. Install Docker Desktop from the official Docker instructions:
+
+   ```text
+   https://docs.docker.com/desktop/setup/install/mac-install/
+   ```
+
+   Choose **Mac with Apple silicon** for M1/M2/M3/M4 Macs, or **Mac with Intel
+   chip** for older Intel Macs.
+
+2. Unzip `research-os-share-YYYYMMDD-HHMMSS.zip`.
+3. Move the unzipped `UX Research` folder to your home folder:
+
+   ```text
+   ~/UX Research
+   ```
+
+   Keep the active workspace outside `Documents`, Desktop and iCloud Drive to
+   avoid common macOS permission and backup issues. Research OS can still back
+   up to iCloud from this local workspace.
+
+4. Open Terminal and go to the Research OS folder:
+
+   ```sh
+   cd ~/UX\ Research/Research\ OS
+   ```
+
+5. Start the dashboard:
+
+   ```sh
+   scripts/run-dashboard-docker.sh
+   ```
+
+   The first run can take a few minutes because Docker builds the local
+   Research OS container.
+
+6. Open:
+
+   ```text
+   http://127.0.0.1:8765/
+   ```
+
+To stop:
+
+```sh
+docker compose down
+```
+
+The `Projects` folder next to `Research OS` is where local project files live.
+Project data stays local by default and is not included in the share package.
+
+Optional company branding can be placed here:
+
+```text
+~/UX Research/Research OS/branding/company-logo.png
+```
+
+Branding files stay local and are not meant to be committed to the public
+Research OS repository.
+
+## Make The Zip
+
+From your own `Research OS` folder:
+
+```sh
+scripts/make-share-zip.sh
+```
+
+The zip is created in:
+
+```text
+../dist/
+```
+
+It includes the Research OS app and an empty `Projects` folder. It does not include your project data.
+
+## Option B: Updates Via Git And Docker
+
+Use this when colleagues should be able to pull updates.
+
+Recommended setup:
+
+- Put the `Research OS` folder in a GitHub repository.
+- Publish the Docker image to GitHub Container Registry.
+- Let colleagues keep their local `UX Research/Projects` folder outside Git.
+- Let colleagues update by pulling the latest image and restarting Docker.
+
+Example image name:
+
+```text
+ghcr.io/your-org/research-os-dashboard:latest
+```
+
+Colleague update command:
+
+```sh
+cd ~/UX\ Research/Research\ OS
+RESEARCH_OS_IMAGE=ghcr.io/your-org/research-os-dashboard:latest docker compose -f docker-compose.release.yml pull
+RESEARCH_OS_IMAGE=ghcr.io/your-org/research-os-dashboard:latest docker compose -f docker-compose.release.yml up -d
+```
+
+For day-to-day development, keep using:
+
+```sh
+docker compose up --build -d
+```
+
+## Folder Shape
+
+Research OS expects this shape:
+
+```text
+UX Research/
+├── Research OS/
+│   ├── research_os.py
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── scripts/
+└── Projects/
+```
+
+This matters because Docker mounts the full `UX Research` folder into the container.
+
+Inside each project, the top-level structure is:
+
+```text
+Projects/<project-id>/
+├── 00-ai-work-files/
+├── 01-input-source-files/
+└── 02-rounds/
+```
+
+Inside each round, the visible structure is:
+
+```text
+02-rounds/<round-id>/
+├── 00-ai-work-files/
+├── 01-input-source-files/
+└── 02-output-deliverables/
+```
+
+## Troubleshooting
+
+Check that Docker sees the dashboard as healthy:
+
+```sh
+docker ps --filter name=research-os-dashboard
+```
+
+Check the health endpoint:
+
+```sh
+curl -fsS http://127.0.0.1:8765/api/health
+```
+
+Restart cleanly:
+
+```sh
+docker compose down
+scripts/run-dashboard-docker.sh
+```

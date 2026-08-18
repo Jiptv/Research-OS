@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    image: ${RESEARCH_OS_IMAGE:?Set RESEARCH_OS_IMAGE, for example ghcr.io/your-org/research-os-dashboard:latest}
+    container_name: research-os-dashboard
+    working_dir: /workspace/Research OS
+    command: ["python3", "research_os.py", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      TZ: "${TZ:-Europe/Amsterdam}"
+      RESEARCH_OS_BACKUP_DIR: "${RESEARCH_OS_BACKUP_DIR:-/icloud/UX Research}"
+    volumes:
+      - ..:/workspace
+      - "${RESEARCH_OS_ICLOUD_DIR:-${HOME}/Library/Mobile Documents/com~apple~CloudDocs/iCloud/UX Research}:/icloud/UX Research"
+    restart: unless-stopped

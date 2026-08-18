@@ -1,0 +1,23 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.DS_Store
+.backup-status.json
+.dashboard-settings.json
+branding/*
+!branding/.gitignore
+!branding/README.md
+!branding/.gitkeep
+local-branding/
+assets/*logo.png
+assets/*footer.png
+08-looped-learning/active-learnings.md
+08-looped-learning/feedback-signals.jsonl
+08-looped-learning/learning-loop-state.json
+08-looped-learning/review-decisions.json
+08-looped-learning/suggested-learnings.md
+Command Shortcuts/Projects/
+Command Shortcuts/Rounds/
+Command Shortcuts/RESTORE.md

@@ -27,6 +27,20 @@ The primary output of research is **knowledge**. Reports, presentations and summ
 
 ---
 
+# License
+
+Research OS is available for noncommercial use under the PolyForm
+Noncommercial License 1.0.0. See `LICENSE.md`.
+
+Commercial use requires separate prior written permission from the repository
+owner. See `COMMERCIAL_USE.md`.
+
+Research OS is provided as-is. Users are responsible for their own research
+data, local backups, AI-provider configuration and review of AI-generated
+outputs.
+
+---
+
 # Core Principles
 
 - Knowledge is the primary product of research.

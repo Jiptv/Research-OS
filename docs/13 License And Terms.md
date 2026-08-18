@@ -1,6 +1,6 @@
 # License And Terms
 
-This page explains the practical choices before making Research OS public.
+This page explains the license choice for Research OS.
 
 This is not legal advice. For company, client or employer-owned work, check
 with the relevant owner before publishing.
@@ -15,7 +15,31 @@ GitHub recommends adding a license so visitors can clearly see how they may use
 the project. GitHub also detects common `LICENSE` files and shows the license on
 the repository page.
 
-## Usual Options
+## Current License Choice
+
+Research OS uses:
+
+```text
+PolyForm Noncommercial License 1.0.0
+```
+
+Commercial use requires separate prior written permission from the repository
+owner.
+
+In plain language:
+
+- People may use, study, modify and share Research OS for noncommercial purposes.
+- People may not sell it, sell access to it, offer it as a paid service, include
+  it in a commercial product, or otherwise use it commercially without written
+  permission.
+- You can still give commercial permission separately if you want to.
+
+See:
+
+- `LICENSE.md`
+- `COMMERCIAL_USE.md`
+
+## Other Common Options Considered
 
 ### Option 1 - MIT License
 
@@ -70,24 +94,14 @@ Typical effect:
 - They do not have clear permission to use, modify or redistribute it.
 - This is confusing for collaborators and not ideal for open source.
 
-## Recommended Choice For Research OS
+## Why Not GPL For This Goal?
 
-If the goal is to let colleagues and other researchers easily try, adapt and
-build on Research OS, use:
+GPL is useful when you want distributed modified versions to remain open source.
+It does not prevent commercial use. People can still sell GPL software or use it
+commercially, as long as they follow the GPL conditions.
 
-```text
-MIT License
-```
-
-If you want a slightly more formal permissive license with explicit patent
-language, use:
-
-```text
-Apache License 2.0
-```
-
-For this project, MIT is probably the easiest default unless there is a specific
-reason to require Apache-2.0 or copyleft.
+Because the goal for Research OS is "commercial use only with permission",
+PolyForm Noncommercial is a better fit.
 
 ## Terms Of Use
 
@@ -109,28 +123,29 @@ Research OS currently runs locally. The repository should still make clear:
 - private company branding and project data should not be committed,
 - AI outputs should be reviewed by a human researcher.
 
-## Suggested README Text
+## README License Text
 
-After choosing a license, add a short README section like:
+The README should say:
 
 ```markdown
 ## License
 
-Research OS is released under the MIT License. See `LICENSE`.
+Research OS is available for noncommercial use under the PolyForm
+Noncommercial License 1.0.0. See `LICENSE.md`.
+
+Commercial use requires separate prior written permission from the repository
+owner. See `COMMERCIAL_USE.md`.
 
 Research OS is provided as-is. Users are responsible for their own research
 data, local backups, AI-provider configuration and review of AI-generated
 outputs.
 ```
 
-For Apache-2.0, replace `MIT License` with `Apache License 2.0`.
-
 ## How To Add A License On GitHub
 
-1. Add a file named `LICENSE` or `LICENSE.md` at the repository root.
-2. Use GitHub's license template chooser, or copy the official license text from
-   a trusted source.
-3. Commit the license before making the repository public.
+1. Keep `LICENSE.md` at the repository root.
+2. Keep `COMMERCIAL_USE.md` at the repository root.
+3. Commit both files before making the repository public.
 
 Common placeholders to fill:
 

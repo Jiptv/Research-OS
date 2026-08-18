@@ -51,12 +51,13 @@ For public distribution, publish the Docker image from clean source and let coll
 
 ## License Before Public
 
-Before making the repository public, choose a license and add a `LICENSE` or
-`LICENSE.md` file at the repository root.
+Before making the repository public, keep the license files at the repository
+root:
 
-For Research OS, the most likely choices are:
+- `LICENSE.md`
+- `COMMERCIAL_USE.md`
 
-- MIT License for the simplest permissive open source release.
-- Apache License 2.0 for a permissive release with more explicit patent terms.
+Research OS uses PolyForm Noncommercial License 1.0.0. Commercial use requires
+separate prior written permission from the repository owner.
 
 See `docs/13 License And Terms.md` before changing repository visibility.

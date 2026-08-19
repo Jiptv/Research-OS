@@ -250,7 +250,7 @@ A Research Program represents an ongoing product, domain, service or problem spa
 Examples include:
 
 * Fulfillment Operations
-* Internal Admin Tools
+* Workflow Tools
 * Customer Messaging
 * Field Operations
 * Workforce Experience
@@ -1744,7 +1744,7 @@ It may include:
 
 ### 33.3 Presentation Preparation
 
-A plain-text presentation structure designed for a researcher or colleague to turn into a presentation.
+A plain-text presentation structure designed for a researcher or collaborator to turn into a presentation.
 
 It may include, per slide:
 

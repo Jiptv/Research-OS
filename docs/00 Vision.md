@@ -159,7 +159,7 @@ Examples:
 
 - Fulfillment Operations
 - Customer Messaging
-- Internal Admin Tools
+- Workflow Tools
 
 A research round represents one specific study.
 

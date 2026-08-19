@@ -41,6 +41,7 @@ PROJECT_STATE_FILE = ".project-pipeline-state.json"
 ROUND_MONITORING_FILE = ".round-monitoring.json"
 QUALITY_GATE_WAIVERS_FILE = ".quality-gate-waivers.json"
 QUALITY_GATE_CACHE_FILE = ".quality-gates-cache.json"
+QUALITY_GATE_RULE_VERSION = "2026-08-19-ai-cleanups-v3"
 DEFAULT_RESEARCH_LENS = "neutral"
 BACKUP_STATUS_FILE = ROOT / ".backup-status.json"
 BACKUP_SCRIPT = ROOT / "scripts" / "backup-to-icloud.sh"
@@ -2075,7 +2076,7 @@ def attach_review_change_metadata(items: list[dict], review_path: Path, decision
 
 LEARNING_CATEGORIES = {
     "scope_abstractness": {
-        "label": "Scope / abstractieniveau",
+        "label": "Scope / abstraction level",
         "keywords": [
             "abstract",
             "concreet",
@@ -2095,7 +2096,7 @@ LEARNING_CATEGORIES = {
         "rule": "Keep research items at the right abstraction level: specific enough to be grounded, but not so narrow that synthesis becomes fragmented.",
     },
     "interpretation_quality": {
-        "label": "Kwaliteit van interpretatie",
+        "label": "Interpretation quality",
         "keywords": [
             "interpret",
             "duiding",
@@ -2113,7 +2114,7 @@ LEARNING_CATEGORIES = {
         "rule": "Separate observation from interpretation and preserve uncertainty, nuance and alternative explanations.",
     },
     "evidence_quality": {
-        "label": "Bewijsvoering",
+        "label": "Evidence quality",
         "keywords": [
             "evidence",
             "bewijs",
@@ -2333,6 +2334,27 @@ def load_learning_signals() -> list[dict]:
     return signals
 
 
+def active_learning_items(limit: int | None = None) -> list[dict]:
+    ensure_looped_learning_files()
+    text = read_text(LOOPED_ACTIVE_FILE)
+    items = []
+    for match in re.finditer(r"^###\s+(LL-[^\n]+)\n(.*?)(?=^###\s+LL-|\Z)", text, flags=re.MULTILINE | re.DOTALL):
+        block = match.group(2)
+        items.append(
+            {
+                "id": match.group(1).strip(),
+                "category": markdown_field(block, "Category"),
+                "stage": markdown_field(block, "Stage"),
+                "rule": markdown_field(block, "Rule"),
+                "approved": markdown_field(block, "Approved"),
+                "notes": markdown_field(block, "Notes"),
+            }
+        )
+    if limit is None:
+        return items
+    return list(reversed(items[-limit:]))
+
+
 def learning_context_key(signal: dict) -> str:
     path = signal.get("review_path", "")
     match = re.search(r"Projects/([^/]+)/(?:02-rounds|03-research-rounds)/([^/]+)/", path)
@@ -2409,6 +2431,57 @@ def learning_quality_by(signals: list[dict], field: str, defaults: Iterable[str]
     return result
 
 
+def top_learning_bucket(values: dict) -> tuple[str, dict] | None:
+    populated = [(key, value) for key, value in values.items() if value.get("total")]
+    if not populated:
+        return None
+    return max(populated, key=lambda item: (item[1].get("iterated", 0), item[1].get("total", 0)))
+
+
+def learning_interpretation(signals: list[dict], quality_by_stage: dict, quality_by_theme: dict) -> dict:
+    total = len(signals)
+    if not total:
+        return {
+            "headline": "No looped-learning feedback has been captured yet.",
+            "details": [
+                "Once review notes are saved, this card will explain what Research OS is learning from them.",
+            ],
+            "trend": "Not enough history yet.",
+        }
+    quality = learning_quality_summary(signals)
+    stage = top_learning_bucket(quality_by_stage)
+    theme = top_learning_bucket(quality_by_theme)
+    details = [
+        f"{quality['iterated']} of {total} captured signals asked for some iteration. That does not mean those whole items were wrong; small wording notes and larger changes both count once.",
+    ]
+    if stage:
+        details.append(
+            f"Most iteration feedback is currently attached to {dict(REVIEW_PIPELINE_STAGES).get(stage[0], title_from_slug(stage[0])).lower()}."
+        )
+    if theme:
+        theme_label = LEARNING_CATEGORIES.get(theme[0], {}).get("label", title_from_slug(theme[0]))
+        details.append(f"The strongest recurring theme is {theme_label.lower()}.")
+    trend = learning_trend(signals)
+    points = trend.get("points", [])
+    if len(points) < 2:
+        trend_text = "No clear trend yet because there is not enough comparable history."
+    else:
+        first = points[0].get("iteration_rate", 0)
+        latest = points[-1].get("iteration_rate", 0)
+        delta = latest - first
+        if abs(delta) < 5:
+            trend_text = "No strong trend yet; the amount of iteration feedback is similar across captured contexts."
+        elif delta > 0:
+            trend_text = "Iteration feedback is higher in the latest captured context, so this is a good moment to look at the active learnings before the next synthesis pass."
+        else:
+            trend_text = "Iteration feedback is lower in the latest captured context, but the history is still small, so treat this as directional rather than a score."
+    return {
+        "headline": "The loop is mostly teaching Research OS how to make analysis more concrete, readable and reviewable.",
+        "details": details,
+        "trend": trend_text,
+    }
+
+
 def looped_learning_metrics() -> dict:
     ensure_looped_learning_files()
     signals = load_learning_signals()
@@ -2431,6 +2504,8 @@ def looped_learning_metrics() -> dict:
     pending_suggestions = sum(1 for item in suggestions if item["status"].lower() in {"pending", "proposed", "open"} and not item["decision"])
     decided_suggestions = len(suggestions) - pending_suggestions
     quality_overall = learning_quality_summary(signals)
+    quality_by_stage = learning_quality_by(signals, "stage", ["evidence", "patterns", "insights", "recommendations", "deliverables"])
+    quality_by_theme = learning_quality_by(signals, "categories", LEARNING_CATEGORIES.keys())
     if pending_suggestions:
         status_label = f"{pending_suggestions} suggestion{'s' if pending_suggestions != 1 else ''} to review"
     elif signals_waiting:
@@ -2456,8 +2531,11 @@ def looped_learning_metrics() -> dict:
             **quality_overall,
             "trend": learning_trend(signals),
         },
-        "quality_by_stage": learning_quality_by(signals, "stage", ["evidence", "patterns", "insights", "recommendations", "deliverables"]),
-        "quality_by_theme": learning_quality_by(signals, "categories", LEARNING_CATEGORIES.keys()),
+        "quality_by_stage": quality_by_stage,
+        "quality_by_theme": quality_by_theme,
+        "learning_interpretation": learning_interpretation(signals, quality_by_stage, quality_by_theme),
+        "recent_active_learnings": active_learning_items(limit=5),
+        "active_learnings_href": dashboard_file_link(LOOPED_ACTIVE_FILE),
         "suggestions_href": dashboard_file_link(LOOPED_SUGGESTIONS_FILE) + "&mode=focus",
     }
 
@@ -3694,7 +3772,7 @@ def gate_instruction(stage: dict) -> str:
     lines = "; ".join(f"{issue.get('id', 'Gate')}: {issue.get('message', '')}" for issue in issues[:4])
     more = stage.get("gates", 0) - len(issues[:4])
     suffix = f"; plus {more} more" if more > 0 else ""
-    return f" Quality gates to check: {lines}{suffix}."
+    return f" Checks needing attention: {lines}{suffix}."
 
 
 def round_stage_action(round_dir: Path, key: str, stage: dict) -> dict:
@@ -3717,11 +3795,11 @@ def round_stage_action(round_dir: Path, key: str, stage: dict) -> dict:
         return action
     if key == "evidence":
         target = round_path(round_dir, "evidence")
-        instruction = "Review proposed evidence here. Keep observations traceable to Sources before using them in Patterns or Insights." + gate_instruction(stage)
+        instruction = "Evidence is the source-backed observation layer. These cleanup notes will be handled by AI when you click Run synthesis next; you only need to review Evidence if Codex explicitly flags an item for researcher judgment." + gate_instruction(stage)
         return dashboard_action("Open evidence", target, instruction, "")
     if key == "patterns":
         target = round_path(round_dir, "patterns") / "patterns.md"
-        instruction = "Review or refine proposed patterns. Patterns should combine multiple pieces of Evidence without becoming final recommendations." + gate_instruction(stage)
+        instruction = "Patterns are the next synthesis layer after Evidence. If new Evidence has not been synthesized yet, run synthesis next so Codex can update Patterns and then surface any new or changed synthesis for review." + gate_instruction(stage)
         return dashboard_action("Open patterns", target, instruction, "")
     if key == "insights":
         target = round_path(round_dir, "insights") / "insights.md"
@@ -3827,7 +3905,7 @@ def markdown_blocks_for_heading(path: Path, pattern: str) -> list[tuple[str, str
 
 
 def evidence_ids_in(text: str) -> list[str]:
-    return sorted(set(re.findall(r"\bEV-[A-Z]+-\d{3}\b", text, flags=re.IGNORECASE)))
+    return sorted(set(re.findall(r"\bEV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b", text, flags=re.IGNORECASE)))
 
 
 def pattern_ids_in(text: str) -> list[str]:
@@ -3921,6 +3999,7 @@ def quality_gate_signature(round_dir: Path, source_total: int, evidence_total: i
         quality_gate_waiver_path(round_dir),
     ]
     return {
+        "rule_version": QUALITY_GATE_RULE_VERSION,
         "source_total": source_total,
         "evidence_total": evidence_total,
         "files": files_signature(paths),
@@ -3943,7 +4022,8 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
     insight_path = round_path(round_dir, "insights") / "insights.md"
     recommendation_path = round_path(round_dir, "recommendations") / "recommendations.md"
 
-    evidence_blocks = markdown_blocks_for_heading(evidence_path, r"^###\s+(EV-[A-Z]+-\d{3})\s*$")
+    evidence_id_pattern = r"EV-[A-Z]+(?:-[A-Z]+)*-\d{3}"
+    evidence_blocks = markdown_blocks_for_heading(evidence_path, rf"^###\s+({evidence_id_pattern})\s*$")
     if source_total and evidence_total and evidence_total < source_total * 8:
         gates["evidence"].append(
             {
@@ -3953,13 +4033,32 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
         )
     for item_id, block in evidence_blocks:
         if weak_reference(markdown_field(block, "Source reference")):
-            gates["evidence"].append({"id": item_id, "message": "Missing source reference or timestamp."})
+            gates["evidence"].append({"id": item_id, "message": "AI will add or repair the source reference before this Evidence is used downstream."})
         if weak_reference(markdown_field(block, "Source")):
-            gates["evidence"].append({"id": item_id, "message": "Missing source document."})
+            gates["evidence"].append({"id": item_id, "message": "AI will add the missing source document before this Evidence is used downstream."})
         if weak_reference(markdown_field(block, "Helps us understand", "Interpretation note")):
-            gates["evidence"].append({"id": item_id, "message": "Missing what this evidence helps us understand."})
+            gates["evidence"].append({"id": item_id, "message": "AI will clarify what this Evidence helps us understand."})
         if len(markdown_field(block, "Observation").split()) > 45:
-            gates["evidence"].append({"id": item_id, "message": "Observation may combine too many ideas."})
+            gates["evidence"].append({"id": item_id, "message": "AI will check whether this observation combines too many ideas and should be split or tightened. No researcher action is needed unless Codex flags it for judgment."})
+
+    active_evidence_ids = [
+        item_id
+        for item_id, block in evidence_blocks
+        if not markdown_field(block, "Status").strip().lower().startswith("rejected")
+    ]
+    pattern_text = read_text(pattern_path) if pattern_path.exists() else ""
+    pattern_evidence_ids = set(evidence_ids_in(pattern_text))
+    unsynthesized_evidence = [item_id for item_id in active_evidence_ids if item_id not in pattern_evidence_ids]
+    if active_evidence_ids and unsynthesized_evidence:
+        preview = ", ".join(unsynthesized_evidence[:8])
+        more = len(unsynthesized_evidence) - 8
+        suffix = f", plus {more} more" if more > 0 else ""
+        gates["patterns"].append(
+            {
+                "id": "PAT-SYNTHESIS-STALE",
+                "message": f"New accepted/curated Evidence has been processed but not synthesized yet. {len(unsynthesized_evidence)} Evidence items are not referenced by Patterns yet ({preview}{suffix}). Run synthesis next so Research OS can update Patterns, propose new or changed Insights, update Recommendations, and mark downstream Deliverables stale if needed.",
+            }
+        )
 
     for item_id, block in markdown_blocks_for_heading(pattern_path, r"^###\s+(PAT-\d{3})\s*$"):
         ids = evidence_ids_in(" ".join([markdown_field(block, "Supporting Evidence", "Evidence"), block]))
@@ -4010,7 +4109,7 @@ def apply_stage_quality_gates(stage: dict, issues: list[dict]) -> dict:
     stage["gate_issues"] = issues[:6]
     if issues and stage.get("status") == "green":
         stage["status"] = "yellow"
-        stage["label"] = f"{len(issues)} quality gate"
+        stage["label"] = f"{len(issues)} checks need attention"
     return stage
 
 
@@ -4082,7 +4181,7 @@ def build_round_dashboard(round_dir: Path) -> dict:
     ensure_round_recommendations_scaffold(round_dir)
     waiting = waiting_sources(source_dir, state, source_items)
     source_processed = max(source_total - len(waiting), 0)
-    evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+-\d{3}\b")
+    evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b")
     pattern_total = markdown_heading_count(round_path(round_dir, "patterns"), r"^###\s+PAT-\d{3}\b")
     insight_total = markdown_heading_count(round_path(round_dir, "insights"), r"^###\s+INS-\d{3}\b")
     recommendation_total = markdown_heading_count(round_path(round_dir, "recommendations"), r"^###\s+REC-\d{3}\b")
@@ -5930,18 +6029,44 @@ DASHBOARD_HTML = r"""<!doctype html>
     .toolbar-status { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
     .manual-refresh { height:26px; border:1px solid var(--border-1); border-radius:12px; background:#fff; color:var(--fg-2); padding:0 9px; font:inherit; font-size:11px; font-weight:650; cursor:pointer; }
     .manual-refresh:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
-    .learning-summary { border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px 16px; margin-bottom:12px; box-shadow: var(--shadow-small-bottom); color:var(--fg-2); font-size:13px; line-height:1.45; }
-    .learning-summary strong { color:var(--fg-1); font-weight:700; }
-    .learning-grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
-    .learning-card { border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px; box-shadow: var(--shadow-small-bottom); }
+    .learning-top-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; margin-bottom:12px; }
+    .learning-detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; }
+    .learning-detail-grid > .learning-card { height:100%; }
+    .learning-analysis-stack { display:grid; grid-template-rows:auto 1fr; gap:12px; min-width:0; height:100%; }
+    .learning-analysis-stack .learning-section { margin-bottom:0; }
+    .learning-card { border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px; box-shadow: var(--shadow-small-bottom); min-width:0; overflow:hidden; }
+    .learning-card h2 { margin:0 0 7px; color:var(--fg-1); font-size:17px; line-height:1.2; }
+    .learning-card p { margin:0; color:var(--fg-2); font-size:13px; line-height:1.45; }
     .learning-card strong { display:block; font-size:22px; line-height:1; font-weight:650; color:var(--fg-1); }
-    .learning-card span { display:block; margin-top:7px; color:var(--muted); font-size:12px; }
+    .learning-card > span { display:block; margin-top:7px; color:var(--muted); font-size:12px; }
     .learning-card .trend { margin-top:8px; font-size:11px; font-weight:700; color:var(--fg-3); }
     .learning-card .trend.up { color:var(--status-warning); }
     .learning-card .trend.down { color:var(--status-success); }
     .learning-card .trend.flat { color:var(--fg-2); }
-    .learning-card .trend.attention, .learning-row .trend.attention { color:var(--status-warning); }
-    .learning-card .trend.good, .learning-row .trend.good { color:var(--status-success); }
+    .learning-card .trend.attention { color:var(--status-warning); }
+    .learning-card .trend.good { color:var(--status-success); }
+    .learning-status-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    .learning-status-line .phase-status { flex:0 0 auto; width:max-content; max-width:100%; line-height:1; }
+    .learning-status-metrics { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:12px; }
+    .learning-mini-metric { border:1px solid var(--line); border-radius:10px; padding:9px 10px; background:var(--surface-subtle); min-width:0; }
+    .learning-mini-metric strong { font-size:18px; }
+    .learning-mini-metric span { font-size:11px; line-height:1.25; }
+    .learning-recent-list { display:grid; gap:0; margin:10px 0 0; padding:0; list-style:none; }
+    .learning-recent-item { display:grid; grid-template-columns:22px 1fr; gap:8px; border-top:1px solid var(--line); padding:9px 0; }
+    .learning-recent-item:first-child { border-top:0; padding-top:0; }
+    .learning-recent-number { width:22px; height:22px; border-radius:999px; display:grid; place-items:center; background:var(--surface-subtle); border:1px solid var(--line); color:var(--fg-2); font-size:11px; font-weight:700; line-height:1; }
+    .learning-recent-item strong { font-size:12px; line-height:1.25; color:var(--fg-1); }
+    .learning-recent-item p { margin-top:3px; color:var(--fg-2); font-size:12px; line-height:1.35; }
+    .learning-more-link { display:inline-flex; width:max-content; margin-top:8px; color:var(--blue); font-size:12px; font-weight:650; text-decoration:none; }
+    .learning-more-link:hover { color:var(--blue-dark); text-decoration:underline; }
+    .learning-context-card { margin-bottom:0; }
+    .learning-context-card h2 { margin-bottom:6px; }
+    .learning-context-summary { max-width:980px; color:var(--fg-1); font-size:13px; line-height:1.45; }
+    .learning-context-points { display:grid; grid-template-columns:1fr; gap:8px; margin-top:10px; }
+    .learning-context-point { border:1px solid var(--line); border-radius:10px; background:var(--surface-subtle); padding:9px 10px; color:var(--fg-2); font-size:12px; line-height:1.35; }
+    .learning-context-point span { display:block; margin:0 0 5px; color:var(--fg-3); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.003em; }
+    .learning-context-trend { margin-top:10px; border-left:3px solid var(--status-warning-bar); background:var(--status-warning-soft-bg); padding:8px 10px; color:var(--fg-2); font-size:12px; line-height:1.4; }
+    .learning-context-trend span { display:block; margin:0 0 2px; color:var(--status-warning); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.003em; }
     .learning-section { position:relative; border:1px solid var(--line); border-radius:12px; background:#fff; margin-bottom:12px; overflow:visible; box-shadow: var(--shadow-small-bottom); }
     .learning-section-head { min-height:42px; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); }
     .learning-section-title { font-size:13px; line-height:1.25; font-weight:700; color:var(--fg-1); }
@@ -5950,6 +6075,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .learning-row { display:grid; grid-template-columns: 1fr auto; gap:12px; align-items:center; min-height:38px; padding:0 14px; border-bottom:1px solid #f1f3f7; font-size:12px; }
     .learning-row:last-child { border-bottom:0; }
     .learning-row span { color:var(--muted); }
+    .learning-row .trend { color:var(--fg-2); font-size:12px; font-weight:400; }
     .learning-quality-row { grid-template-columns: 190px 1fr 148px; padding:9px 14px; }
     .learning-rate { display:grid; gap:5px; }
     .learning-rate-bar { height:8px; border-radius:999px; overflow:hidden; background:var(--grey-3); display:flex; }
@@ -6006,7 +6132,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     .dot.red, .red > .dot { background: var(--status-danger); }
     .dot.gray, .gray > .dot { background: var(--grey-3); }
     .dot.blue, .blue > .dot { background: var(--blue); }
-    .fill.green, .fill.yellow, .fill.blue { background: var(--green); }
+    .fill.green { background: var(--green); }
+    .fill.yellow { background: var(--status-warning-bar); }
+    .fill.blue { background: var(--blue); }
     .fill.red { background: var(--red); }
     .fill.gray { background: var(--grey-3); }
     .project-body, .round-body { display:none; }
@@ -6032,7 +6160,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .phase-left { display:flex; align-items:center; gap:8px; min-width:0; }
     .phase-left { flex:1; }
     .phase-name { text-transform: uppercase; letter-spacing: .003em; white-space:nowrap; }
-    .phase-status { height:26px; display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 10px; color:var(--fg-2); font-size:11px; font-weight:650; text-transform:none; letter-spacing:.003em; white-space:nowrap; }
+    .phase-status { min-width:max-content; height:26px; display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 10px; color:var(--fg-2); font-size:11px; font-weight:650; text-transform:none; letter-spacing:.003em; white-space:nowrap; line-height:1; }
     .phase-status.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-bg); color:var(--status-warning); }
     .phase-status.green { border-color:var(--status-success-bg); background:var(--status-success-bg); color:var(--status-success); }
     .phase-status.gray { color:var(--fg-3); }
@@ -6155,7 +6283,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       .rail { top:56px; width:auto; height:auto; min-height: 44px; border-right:0; border-bottom:1px solid var(--line); padding:7px 14px; flex-direction:row; justify-content:flex-start; overflow-x:auto; overflow-y:hidden; }
       main { padding: 20px 14px 30px; }
       .toolbar { align-items:flex-start; flex-direction:column; }
-      .learning-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .learning-top-grid { grid-template-columns: 1fr; }
+      .learning-detail-grid { grid-template-columns:1fr; }
+      .learning-context-points { grid-template-columns:1fr; }
       .row { grid-template-columns: 28px 1fr; }
       .project > .row { grid-template-columns: 28px 44px 1fr; }
       .round .row { grid-template-columns: 28px 1fr auto; }
@@ -6179,6 +6309,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     @media (min-width: 761px) and (max-width: 1080px) {
       .project-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .learning-detail-grid { grid-template-columns:1fr; }
     }
   </style>
 </head>
@@ -6249,9 +6380,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     function learningLabel(key) {
       return {
-        scope_abstractness: "Scope / abstractieniveau",
-        interpretation_quality: "Interpretatiekwaliteit",
-        evidence_quality: "Bewijsvoering",
+        scope_abstractness: "Scope / abstraction level",
+        interpretation_quality: "Interpretation quality",
+        evidence_quality: "Evidence quality",
         quality_gates: "Quality gates",
         evidence: "Evidence",
         patterns: "Patterns",
@@ -6329,7 +6460,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       const explanation = promptDescription ? `<div class="prompt-explain"><strong>What this does</strong>${promptDescription}</div>` : "";
       const promptTools = prompt ? explanation : "";
       const qualityGates = Array.isArray(action.quality_gates) ? action.quality_gates : [];
-      const gateTools = qualityGates.length ? `<div class="gate-accept-note">Quality gate reviewed and acceptable?</div><button class="copy" type="button" data-waive-gates="${encodeURIComponent(JSON.stringify(qualityGates))}" data-waive-path="${escapeHtml(action.quality_gate_path || "")}">Accept visible gates</button>` : "";
+      const waivableChecks = qualityGates.filter(gate => gate.id !== "PAT-SYNTHESIS-STALE");
+      const gateTools = waivableChecks.length ? `<div class="gate-accept-note">Checks reviewed and acceptable?</div><button class="copy" type="button" data-waive-gates="${encodeURIComponent(JSON.stringify(waivableChecks))}" data-waive-path="${escapeHtml(action.quality_gate_path || "")}">Mark checks acceptable</button>` : "";
       const href = action.href && isReviewHref(action.href) ? focusHref(action.href) : action.href;
       const link = href ? `<br><a href="${href}">${escapeHtml(action.label || "Open")}</a>` : "";
       const isPrompt = kind === "prompt";
@@ -6415,8 +6547,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     function renderRoundReviewLine(round) {
       const action = round.stages.reviews && round.stages.reviews.action;
       const count = round.review.pending_items;
-      const state = count ? `<a class="stage-cta review" href="${focusHref(action.href)}">Start review for ${count} ${count === 1 ? "item" : "items"}</a>` : "";
-      return `<div class="round-review-line ${count ? "" : "clear"}"><div><div class="round-review-title">Round reviews</div><div class="round-review-sub">Decisions before this round can feed deliverables or current understanding</div></div><div class="round-review-actions">${renderResearchLensControl(round)}<div>${state}</div></div>${info(action)}</div>`;
+      const patternIssues = (((round.stages || {}).patterns || {}).gate_issues) || [];
+      const staleGate = patternIssues.find(issue => issue.id === "PAT-SYNTHESIS-STALE");
+      const title = staleGate ? "Next step" : "Round reviews";
+      const subtitle = staleGate ? "New evidence has been processed. Run synthesis to see whether Patterns, Insights and Recommendations should change." : "Decisions before this round can feed deliverables or current understanding";
+      const state = count ? `<a class="stage-cta review" href="${focusHref(action.href)}">Start review for ${count} ${count === 1 ? "item" : "items"}</a>` : (staleGate ? `<span class="stage-cta review">Run synthesis next</span>` : "");
+      return `<div class="round-review-line ${count || staleGate ? "" : "clear"}"><div><div class="round-review-title">${escapeHtml(title)}</div><div class="round-review-sub">${escapeHtml(subtitle)}</div></div><div class="round-review-actions">${renderResearchLensControl(round)}<div>${state}</div></div>${info(action)}</div>`;
     }
     function renderOutputOnly(round) {
       const stage = round.stages && round.stages.deliverables;
@@ -6474,19 +6610,20 @@ DASHBOARD_HTML = r"""<!doctype html>
         ["evidence", "patterns", "insights", "recommendations"].forEach(key => {
           ((stages[key] && stages[key].gate_issues) || []).forEach(issue => gateItems.push({ stage: key, id: issue.id, message: issue.message }));
         });
+        const staleGate = gateItems.find(issue => issue.id === "PAT-SYNTHESIS-STALE");
         const gateText = gateSummary(round);
         return {
           status: (reviews || gates) ? "yellow" : "green",
-          label: reviews && gates ? `${reviews} review · ${gates} gates` : (reviews ? `${reviews} to review` : (gates ? `${gates} quality gates` : "up to date")),
+          label: staleGate ? "new evidence needs synthesis" : (reviews && gates ? `${reviews} review · ${gates} checks` : (reviews ? `${reviews} to review` : (gates ? `${gates} checks need attention` : "up to date"))),
           action: {
             label: "Run synthesis",
             button_label: "Run synthesis",
             copy_label: "run synthesis",
-            instruction: reviews || gates ? "Continue synthesis after your review batch. Codex applies completed decisions, continues the next synthesis step, and improves quality gaps where the source material supports it." : "Synthesis is up to date. Use this prompt only to check whether anything changed before continuing downstream.",
-            prompt_description: "Codex applies your completed Evidence, Pattern, Insight or Recommendation review decisions, continues the next appropriate synthesis step, updates Recommendations, and improves quality gaps where the source material supports it. It must not make review decisions for you.",
+            instruction: staleGate ? "New Evidence has been processed and curated, but it has not been carried into Patterns, Insights or Recommendations yet. Run synthesis next before trusting downstream deliverables." : (reviews || gates ? "Continue synthesis after your review batch. Codex applies completed decisions, continues the next synthesis step, and improves quality gaps where the source material supports it." : "Synthesis is up to date. Use this prompt only to check whether anything changed before continuing downstream."),
+            prompt_description: staleGate ? "Codex should incorporate the newly processed Evidence into cross-source synthesis. It should update or add Patterns where supported, then stop at the next review gate so the researcher can review any new or changed Patterns, Insights or Recommendations before output is refreshed." : "Codex applies your completed Evidence, Pattern, Insight or Recommendation review decisions, continues the next appropriate synthesis step, updates Recommendations, and improves quality gaps where the source material supports it. It must not make review decisions for you.",
             quality_gate_path: round.path,
             quality_gates: gateItems,
-            prompt: `Continue synthesis after my reviews for this Research OS round in Codex/Cowork: ${round.path}.\n\nFirst read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.\nRead 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules. If any source is marked researcher-synthesis, treat it as high-weight directional researcher interpretation for Insights, Recommendations and Current Understanding; do not treat it as standalone participant Evidence unless explicitly requested.\n${lensInstruction(round)}\nRead the review decisions for Evidence, Patterns, Insights and Recommendations.\nApply completed review decisions to the Research OS documents.\nContinue the next appropriate synthesis step based on which reviews are complete:\n- after Evidence reviews: update Patterns\n- after Pattern reviews: update Insights\n- after Insight reviews: update Recommendations\n- after Recommendation reviews: prepare downstream output/current understanding or report what still blocks it\n\nMaintain Recommendations as a living synthesis layer. Each Recommendation should include:\n- What we learned\n- What we should do\n- optional options/tradeoff when multiple routes are supported\n- type/labels when useful\n- based on Evidence, Pattern or Insight IDs\n- confidence and validation/open questions where relevant\n\nRecommendation writing rules:\n- Write like a researcher explaining the implication to another human, not like a compressed summary dump.\n- For What we learned, start with one clear sentence. If there are multiple details, put them in 2-4 bullets.\n- For What we should do, start with one clear recommendation sentence. If there are multiple concrete changes, put them in 2-5 bullets.\n- Avoid long paragraphs that combine rationale, examples, and actions in one line.\n\nAlso improve quality gaps where the source material supports it:\ntraceability, weak support, contradicting evidence, assumptions/open questions, unclear "Helps us understand" fields, and over-compressed Patterns/Insights/Recommendations that do not stand alone.\n\nDo not call APIs.\nDo not run local stubs.\nDo not use the backend pipeline.\nDo not make review decisions for me.\nKeep unresolved items pending in the web UI.\n\nCurrent visible gate examples:\n${gateText}\n\nReport what changed, what was not changed, and what still needs review.`
+            prompt: `Continue synthesis after my reviews for this Research OS round in Codex/Cowork: ${round.path}.\n\nFirst read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.\nRead 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules. If any source is marked researcher-synthesis, treat it as high-weight directional researcher interpretation for Insights, Recommendations and Current Understanding; do not treat it as standalone participant Evidence unless explicitly requested.\n${lensInstruction(round)}\nRead the review decisions for Evidence, Patterns, Insights and Recommendations.\nApply completed review decisions to the Research OS documents.\nContinue the next appropriate synthesis step based on which reviews are complete:\n- first handle AI-performable Evidence cleanup checks, such as splitting over-compressed observations or repairing traceability, without making researcher review decisions\n- after Evidence reviews: update Patterns\n- after Pattern reviews: update Insights\n- after Insight reviews: update Recommendations\n- after Recommendation reviews: prepare downstream output/current understanding or report what still blocks it\n\nMaintain Recommendations as a living synthesis layer. Each Recommendation should include:\n- What we learned\n- What we should do\n- optional options/tradeoff when multiple routes are supported\n- type/labels when useful\n- based on Evidence, Pattern or Insight IDs\n- confidence and validation/open questions where relevant\n\nRecommendation writing rules:\n- Write like a researcher explaining the implication to another human, not like a compressed summary dump.\n- For What we learned, start with one clear sentence. If there are multiple details, put them in 2-4 bullets.\n- For What we should do, start with one clear recommendation sentence. If there are multiple concrete changes, put them in 2-5 bullets.\n- Avoid long paragraphs that combine rationale, examples, and actions in one line.\n\nAlso improve quality gaps where the source material supports it:\ntraceability, weak support, contradicting evidence, assumptions/open questions, unclear "Helps us understand" fields, over-compressed Evidence observations that Codex can safely split or tighten, and over-compressed Patterns/Insights/Recommendations that do not stand alone.\n\nDo not call APIs.\nDo not run local stubs.\nDo not use the backend pipeline.\nDo not make review decisions for me.\nKeep unresolved items pending in the web UI.\n\nCurrent visible checks needing attention:\n${gateText}\n\nReport what changed, what was not changed, and what still needs review.`
           }
         };
       }
@@ -6531,9 +6668,11 @@ DASHBOARD_HTML = r"""<!doctype html>
       const gates = Number(stage.gates || 0);
       if (key === "deliverables") return `${Number(stage.generated || 0)}/${total || 0} generated`;
       if (stage.waiting && ["sources", "representations"].includes(key)) return `${plural(stage.waiting, "source")} waiting`;
-      if (stage.review && gates) return `${stage.review} review · ${gates} gates`;
+      if (key === "patterns" && Array.isArray(stage.gate_issues) && stage.gate_issues.some(issue => issue.id === "PAT-SYNTHESIS-STALE")) return "Run synthesis to update";
+      if (stage.review && gates) return `${stage.review} review · ${gates} checks`;
       if (stage.review) return `${stage.review} to review`;
-      if (stage.gates) return `${stage.gates} quality ${stage.gates === 1 ? "gate" : "gates"}`;
+      if (key === "evidence" && stage.gates) return "Run synthesis to update";
+      if (stage.gates) return `${stage.gates} ${stage.gates === 1 ? "check" : "checks"} need attention`;
       if (total && ["sources", "representations"].includes(key)) return `${processed}/${total} processed`;
       if (total && ["evidence", "patterns", "insights", "recommendations", "deliverables"].includes(key)) return plural(total, itemLabel);
       if (stage.status === "green") return "Ready";
@@ -6563,6 +6702,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       const href = action.href || "#";
       const labelHref = stage.review ? reviewStageHref(stages, key) : href;
       const label = stageDisplayLabel(key, stage);
+      const labelClass = `stage-cta ${stage.review || stage.gates ? "review" : ""}`;
+      const labelElement = stage.gates && !stage.review
+        ? `<span class="${labelClass}">${escapeHtml(label)}</span>`
+        : `<a class="${labelClass}" href="${labelHref}">${escapeHtml(label)}</a>`;
       if (key === "deliverables") {
         const items = Array.isArray(stage.items) ? stage.items : [];
         const docs = items.map(item => {
@@ -6590,7 +6733,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         }).join("");
         return `<div class="stage deliverables-stage ${child ? "child" : ""}"><div class="deliverables-head"><div class="deliverables-title">${dot(stage.status)} ${escapeHtml(stageNames[key] || key)}</div><div class="deliverables-meta"><span>${escapeHtml(label)}</span></div></div><div class="deliverable-links">${docs}</div></div>`;
       }
-      return `<div class="stage ${child ? "child" : ""}"><a class="stage-link" href="${href}"><div class="stage-name">${dot(stage.status)} ${escapeHtml(stageNames[key] || key)}</div>${renderProgress(stage)}</a><div class="stage-label"><a class="stage-cta ${stage.review ? "review" : ""}" href="${labelHref}">${escapeHtml(label)}</a></div>${info(stage.action)}</div>`;
+      return `<div class="stage ${child ? "child" : ""}"><a class="stage-link" href="${href}"><div class="stage-name">${dot(stage.status)} ${escapeHtml(stageNames[key] || key)}</div>${renderProgress(stage)}</a><div class="stage-label">${labelElement}</div>${info(stage.action)}</div>`;
     }
     function renderLearningBreakdown(title, values) {
       const rows = Object.entries(values || {}).filter(([, value]) => Number(value) > 0);
@@ -6613,9 +6756,43 @@ DASHBOARD_HTML = r"""<!doctype html>
       if (iterated > 0) return { label: "Mostly small notes", className: "flat" };
       return { label: "Confirmation notes", className: "good" };
     }
-    function percentCard(value, label, note, className = "") {
-      const rate = Number(value || 0);
-      return `<div class="learning-card"><strong>${rate}%</strong><span>${escapeHtml(label)}</span><div class="trend ${className}">${escapeHtml(note || "")}</div></div>`;
+    function learningDisplayTitle(item) {
+      const raw = String((item && item.id) || "Learning").replace(/^LL-/, "");
+      const words = raw.replace(/[-_]+/g, " ").trim().split(/\s+/).filter(Boolean);
+      const known = {
+        ai: "AI",
+        api: "API",
+        pdf: "PDF",
+        ppt: "PowerPoint",
+        ui: "UI",
+        ux: "UX",
+        os: "OS",
+        ll: "Looped Learning",
+        codex: "Codex",
+        cowork: "Cowork",
+        slack: "Slack",
+        markdown: "Markdown"
+      };
+      return words.map((word, index) => {
+        const lower = word.toLowerCase();
+        if (known[lower]) return known[lower];
+        return index === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+      }).join(" ");
+    }
+    function recentLearningList(items, href) {
+      const rows = Array.isArray(items) ? items.slice(0, 5) : [];
+      if (!rows.length) return `<p>No active learnings yet.</p>`;
+      const list = `<ol class="learning-recent-list">${rows.map((item, index) => `<li class="learning-recent-item"><span class="learning-recent-number">${index + 1}</span><div><strong>${escapeHtml(learningDisplayTitle(item))}</strong><p>${escapeHtml(item.rule || "No rule text found.")}</p></div></li>`).join("")}</ol>`;
+      const more = href ? `<a class="learning-more-link" href="${escapeHtml(href)}">See more learnings</a>` : "";
+      return `${list}${more}`;
+    }
+    function interpretationCard(interpretation) {
+      const item = interpretation || {};
+      const details = Array.isArray(item.details) ? item.details : [];
+      const labels = ["Volume", "Where", "Theme"];
+      const detailHtml = details.length ? `<div class="learning-context-points">${details.map((detail, index) => `<div class="learning-context-point"><span>${escapeHtml(labels[index] || "Context")}</span>${escapeHtml(detail)}</div>`).join("")}</div>` : "";
+      const trend = item.trend ? `<div class="learning-context-trend"><span>Trend</span>${escapeHtml(item.trend)}</div>` : "";
+      return `<section class="learning-card learning-context-card"><h2>What this means</h2><div class="learning-context-summary">${escapeHtml(item.headline || "Looped Learning explains what your review feedback is teaching Research OS.")}</div>${detailHtml}${trend}</section>`;
     }
     function renderQualityBreakdown(title, values) {
       const rows = Object.entries(values || {}).filter(([, value]) => Number(value && value.total) > 0);
@@ -6631,7 +6808,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       }).join("")}</div></section>`;
     }
     function renderLearning(metrics) {
-      const reviewCta = metrics.suggestions_pending ? `<a class="stage-cta review" href="${metrics.suggestions_href}">Review learning suggestions</a>` : `<span class="mini-note">No learning suggestions waiting</span>`;
+      const reviewQueue = metrics.suggestions_pending ? `<section class="learning-section"><div class="learning-section-head"><div><div class="learning-section-title">Learning review queue</div><div class="mini-sub">Research OS-wide rules inferred from your review notes</div></div><div><a class="stage-cta review" href="${metrics.suggestions_href}">Review learning suggestions</a></div></div></section>` : "";
       const latest = metrics.latest_run || {};
       const latestStamp = latest.timestamp || latest.created_at || "";
       const latestText = latestStamp ? `${escapeHtml(latest.status || "completed")} · ${escapeHtml(new Date(latestStamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }))}` : "No learning loop yet";
@@ -6644,17 +6821,33 @@ DASHBOARD_HTML = r"""<!doctype html>
         instruction: metrics.signals_waiting ? "New review feedback is waiting to be processed into learning suggestions." : "Looped Learning is up to date. You can still ask Codex to check whether active learnings and suggestions are consistent.",
         prompt: metrics.prompt || ""
       }, "prompt");
-      return `<section class="learning-summary">${escapeHtml(learningSentence)}</section>
-      <div class="learning-grid">
-        <div class="learning-card"><strong>${metrics.signals || 0}</strong><span>captured feedback signals</span><div class="trend">review notes saved for learning</div></div>
-        <div class="learning-card"><strong>${quality.iterated || 0}</strong><span>iteration feedback signals</span><div class="trend attention">small notes and larger changes counted equally</div></div>
-        <div class="learning-card"><strong>${metrics.suggestions_pending}</strong><span>suggested learnings to review</span><div class="trend ${metrics.suggestions_pending ? "attention" : "good"}">${metrics.suggestions_pending ? "waiting for your decision" : "nothing waiting"}</div></div>
-        <div class="learning-card"><strong>${metrics.active_learnings}</strong><span>active learnings</span><div class="trend ${metrics.signals_waiting ? "attention" : "good"}">${metrics.signals_waiting || 0} signals to process</div></div>
+      return `<div class="learning-top-grid">
+        <section class="learning-card">
+          <h2>Learning loop status</h2>
+          <p>${escapeHtml(learningSentence)}</p>
+          <div class="learning-status-line"><span class="phase-status ${metrics.status || "gray"}">${dot(metrics.status || "gray")}${escapeHtml(metrics.status_label || "not started")}</span>${learningPrompt}</div>
+          <div class="trend">Last learning loop: ${latestText}</div>
+          <div class="learning-status-metrics">
+            <div class="learning-mini-metric"><strong>${metrics.signals || 0}</strong><span>captured feedback signals</span></div>
+            <div class="learning-mini-metric"><strong>${quality.iterated || 0}</strong><span>iteration feedback signals</span></div>
+            <div class="learning-mini-metric"><strong>${metrics.active_learnings || 0}</strong><span>active learnings</span></div>
+            <div class="learning-mini-metric"><strong>${metrics.signals_waiting || 0}</strong><span>signals to process</span></div>
+          </div>
+        </section>
+        ${interpretationCard(metrics.learning_interpretation)}
       </div>
-      <section class="learning-section"><div class="learning-section-head"><div><div class="learning-section-title">Learning loop status</div><div class="mini-sub">Last learning loop: ${latestText}</div></div><div class="phase-left"><span class="phase-status ${metrics.status || "gray"}">${dot(metrics.status || "gray")}${escapeHtml(metrics.status_label || "not started")}</span>${learningPrompt}</div></div></section>
-      <section class="learning-section"><div class="learning-section-head"><div><div class="learning-section-title">Learning review queue</div><div class="mini-sub">Research OS-wide rules inferred from your review notes</div></div><div>${reviewCta}</div></div></section>
-      ${renderQualityBreakdown("Where feedback asks us to improve", metrics.quality_by_stage)}
-      ${renderQualityBreakdown("Recurring improvement themes", metrics.quality_by_theme)}`;
+      ${reviewQueue}
+      <div class="learning-detail-grid">
+        <div class="learning-analysis-stack">
+          ${renderQualityBreakdown("Where feedback asks us to improve", metrics.quality_by_stage)}
+          ${renderQualityBreakdown("Recurring improvement themes", metrics.quality_by_theme)}
+        </div>
+        <section class="learning-card">
+          <h2>Latest learnings</h2>
+          <p>The last Research OS-wide rules that were approved from your review feedback.</p>
+          ${recentLearningList(metrics.recent_active_learnings, metrics.active_learnings_href)}
+        </section>
+      </div>`;
     }
     function renderSettings(settings) {
       const item = settings || {};

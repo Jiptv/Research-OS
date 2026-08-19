@@ -408,17 +408,17 @@ Minor wording changes may be accepted automatically after the Research Round has
 Input:
 
 ```text
-We want to understand how Internal Admin Tools should support users in fulfillment operations.
+We want to understand how Workflow Tools should support users in service operations.
 ```
 
 The Research Planner may propose:
 
 ```text
 Research objective:
-Understand how Internal Admin Tools are currently used in fulfillment operations, which user and operational needs are not sufficiently supported, and what future role the product should fulfill.
+Understand how Workflow Tools are currently used in service operations, which user and operational needs are not sufficiently supported, and what future role the product should fulfill.
 
 Proposed Research Questions:
-- Which roles use Internal Admin Tools in fulfillment operations?
+- Which roles use Workflow Tools in service operations?
 - Which workflows depend on it?
 - Where do users rely on workarounds or other tools?
 - Which information and decisions are most critical?

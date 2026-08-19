@@ -33,8 +33,7 @@ Before changing files or processing research input, read:
 If the user's request is about setup, installation, Docker or sharing, also read:
 
 - `Research OS/START_HERE.md`
-- `Research OS/docs/11 Colleague Setup.md`
-- `Research OS/docs/12 Public Release Checklist.md`
+- `Research OS/docs/11 Setup.md`
 
 ## Core Rules
 
@@ -43,7 +42,7 @@ If the user's request is about setup, installation, Docker or sharing, also read
 - Evidence must stay traceable to source material.
 - The AI can draft, structure, critique and update files, but the researcher decides what becomes accepted knowledge.
 - Do not overwrite or delete source files unless the user explicitly asks.
-- Do not publish or expose local secrets, private project data or local company branding.
+- Do not expose local secrets, private project data or local company branding.
 - Keep generated work in the expected project or round folders.
 
 ## Common Commands

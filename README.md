@@ -34,14 +34,14 @@ git pull
 scripts/run-dashboard-docker.sh
 ```
 
-Docker Compose examples are in `docs/11 Colleague Setup.md`.
+Docker Compose examples are in `docs/11 Setup.md`.
 
-Release notes are in `CHANGELOG.md`.
+Change notes are in `CHANGELOG.md`.
 
-For AI assistants opening the whole `UX Research` workspace, the share package
-also places `CLAUDE.md` and `AGENTS.md` at the `UX Research/` root. Those files
-tell Claude, Codex or another coding agent to read the Research OS instructions
-and work with both `Research OS/` and `Projects/`.
+For AI assistants opening the whole `UX Research` workspace, keep `AGENTS.md`
+at the workspace root. That file tells Claude, Codex or another coding agent to
+read the Research OS instructions and work with both `Research OS/` and
+`Projects/`.
 
 Use this first prompt with any AI assistant:
 
@@ -98,9 +98,8 @@ Before making architectural or implementation changes, always read the relevant 
 | **05 Knowledge Pipeline** | How research flows through the system from raw input to deliverables. |
 | **08 Contribution Principles** | How humans and AI assistants should change the system. |
 | **09 Project Handover** | Original project background and handover context for future contributors. |
-| **11 Colleague Setup** | How to share Research OS with colleagues by zip or GitHub Container Registry. |
-| **12 Public Release Checklist** | What to check before publishing Research OS more broadly. |
-| **13 License And Terms** | License and terms options before making Research OS public. |
+| **11 Setup** | How to install and update Research OS through GitHub and Docker. |
+| **13 License And Terms** | License and commercial-use terms. |
 | **FILE_STRUCTURE** | Practical guide to the folders, researcher actions, and AI work files. |
 
 If implementation conflicts with the documentation, update the documentation first.
@@ -295,9 +294,9 @@ UX Research/
 └── Projects/
 ```
 
-For colleagues, the easiest setup is: install Docker Desktop, put `Research OS`
-inside a folder named `UX Research`, run `scripts/run-dashboard-docker.sh`, then
-open `http://127.0.0.1:8765/`.
+The easiest setup is: install Docker Desktop, clone `Research OS` into a folder
+named `UX Research`, run `scripts/run-dashboard-docker.sh`, then open
+`http://127.0.0.1:8765/`.
 
 On Mac, Safari can add the dashboard to the Dock:
 

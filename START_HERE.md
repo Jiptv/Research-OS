@@ -42,46 +42,9 @@ Docker is the app that lets Research OS run locally on your computer.
 Docker is ready when you see the Docker icon in the Mac menu bar and Docker
 Desktop is no longer showing a startup screen.
 
-## Step 2 - Put The UX Research Folder In Your Home Folder
+## Step 2 - Install From GitHub
 
-If you received a zip file, use these steps:
-
-1. Unzip the Research OS zip file.
-2. You should see a folder named:
-
-   ```text
-   UX Research
-   ```
-
-3. Move that whole folder into your home folder.
-
-   Your home folder is the folder with your Mac username. It is usually visible
-   in Finder under `Macintosh HD > Users > your-name`.
-
-   Recommended location:
-
-   ```text
-   ~/UX Research
-   ```
-
-   This keeps the active Research OS workspace outside `Documents`, Desktop and
-   iCloud Drive. That avoids common macOS permission and backup issues. Research
-   OS can still back up to iCloud from this local workspace.
-
-The final folder shape should be:
-
-```text
-Home folder/
-└── UX Research/
-    ├── Research OS/
-    └── Projects/
-```
-
-Important: do not rename `UX Research`, `Research OS` or `Projects`.
-
-## Alternative Step 2 - Install From GitHub
-
-Use this if you received the GitHub repository link instead of a zip file.
+Research OS is installed and updated through GitHub.
 
 First make sure Git is available. On many Macs it is already installed. If this
 command asks you to install Apple command line tools, accept that prompt:
@@ -99,7 +62,20 @@ mkdir -p "$HOME/UX Research/Projects"
 cd "$HOME/UX Research/Research OS"
 ```
 
-After that, continue with Step 5 below.
+This keeps the active Research OS workspace outside `Documents`, Desktop and
+iCloud Drive. That avoids common macOS permission and backup issues. Research OS
+can still back up to iCloud from this local workspace.
+
+The final folder shape should be:
+
+```text
+Home folder/
+└── UX Research/
+    ├── Research OS/
+    └── Projects/
+```
+
+Important: do not rename `UX Research`, `Research OS` or `Projects`.
 
 To get Research OS updates later:
 
@@ -228,8 +204,8 @@ Optional local branding files can go here:
 ~/UX Research/Research OS/branding/company-footer.png
 ```
 
-Branding files are local. They are not meant to be published in the public
-Research OS repository.
+Branding files are local. They are not meant to be committed to the Research OS
+repository.
 
 ## Using An AI Assistant With Research OS
 
@@ -359,8 +335,9 @@ If you use another AI assistant, use the same pattern:
 
 4. Ask it to explain the current project state before changing files.
 
-If the AI assistant cannot open local folders, upload the zip or relevant files
-manually, but make sure it receives both `Research OS` and `Projects`.
+If the AI assistant cannot open local folders, connect it to the local
+`~/UX Research` workspace or share the relevant files manually. Make sure it
+receives both `Research OS` and `Projects` context.
 
 ## If Something Does Not Work
 

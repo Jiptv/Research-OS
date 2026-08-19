@@ -365,7 +365,7 @@ A Research Program is the long-lived container for research about a product, dom
 Examples:
 
 - Fulfillment Operations
-- Internal Admin Tools
+- Workflow Tools
 - Customer Messaging
 - Field Operations
 

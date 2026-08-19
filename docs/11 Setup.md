@@ -1,6 +1,6 @@
-# Colleague Setup
+# Setup
 
-This guide is for teammates who want to run Research OS locally.
+This guide is for people who want to run Research OS locally.
 
 For the shortest non-technical setup guide, read:
 
@@ -24,9 +24,10 @@ UX Research/
 The dashboard launcher creates `Projects/` next to `Research OS/` if it does
 not exist yet.
 
-## Option A: Zip Package
+## Option A: GitHub Pull And Docker
 
-Use this when you want to send one simple file.
+Use this as the default setup. Install once from GitHub, then pull updates when
+Research OS changes.
 
 1. Install Docker Desktop from the official Docker instructions:
 
@@ -37,24 +38,20 @@ Use this when you want to send one simple file.
    Choose **Mac with Apple silicon** for M1/M2/M3/M4 Macs, or **Mac with Intel
    chip** for older Intel Macs.
 
-2. Unzip `research-os-share-YYYYMMDD-HHMMSS.zip`.
-3. Move the unzipped `UX Research` folder to your home folder:
+2. Open Terminal and install Research OS from GitHub:
 
-   ```text
-   ~/UX Research
+   ```sh
+   mkdir -p "$HOME/UX Research"
+   git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"
+   mkdir -p "$HOME/UX Research/Projects"
+   cd "$HOME/UX Research/Research OS"
    ```
 
    Keep the active workspace outside `Documents`, Desktop and iCloud Drive to
    avoid common macOS permission and backup issues. Research OS can still back
    up to iCloud from this local workspace.
 
-4. Open Terminal and go to the Research OS folder:
-
-   ```sh
-   cd ~/UX\ Research/Research\ OS
-   ```
-
-5. Start the dashboard:
+3. Start the dashboard:
 
    ```sh
    scripts/run-dashboard-docker.sh
@@ -63,7 +60,7 @@ Use this when you want to send one simple file.
    The first run can take a few minutes because Docker builds the local
    Research OS container.
 
-6. Open:
+4. Open:
 
    ```text
    http://127.0.0.1:8765/
@@ -76,48 +73,10 @@ docker compose down
 ```
 
 The `Projects` folder next to `Research OS` is where local project files live.
-Project data stays local by default and is not included in the share package.
+Project data stays local by default and should not be committed to the Research
+OS repository.
 
-Optional company branding can be placed here:
-
-```text
-~/UX Research/Research OS/branding/company-logo.png
-```
-
-Branding files stay local and are not meant to be committed to the public
-Research OS repository.
-
-## Make The Zip
-
-From your own `Research OS` folder:
-
-```sh
-scripts/make-share-zip.sh
-```
-
-The zip is created in:
-
-```text
-../dist/
-```
-
-It includes the Research OS app and an empty `Projects` folder. It does not include your project data.
-
-## Option B: Updates Via Git And Docker
-
-Use this when colleagues should be able to pull updates.
-
-Simple GitHub setup:
-
-```sh
-mkdir -p "$HOME/UX Research"
-git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"
-mkdir -p "$HOME/UX Research/Projects"
-cd "$HOME/UX Research/Research OS"
-scripts/run-dashboard-docker.sh
-```
-
-Colleague update command:
+Update command:
 
 ```sh
 cd "$HOME/UX Research/Research OS"
@@ -125,30 +84,16 @@ git pull
 scripts/run-dashboard-docker.sh
 ```
 
-Keep the local `UX Research/Projects` folder outside Git. Project data stays
-local by default and should not be committed to the public Research OS
-repository.
-
-Optional container-registry setup:
-
-- Publish the Docker image to GitHub Container Registry.
-- Let colleagues update by pulling the latest image and restarting Docker.
-
-Example image name:
+Optional company branding can be placed here:
 
 ```text
-ghcr.io/your-org/research-os-dashboard:latest
+~/UX Research/Research OS/branding/company-logo.png
 ```
 
-Container-registry update command:
+Branding files stay local and are not meant to be committed to the Research OS
+repository.
 
-```sh
-cd ~/UX\ Research/Research\ OS
-RESEARCH_OS_IMAGE=ghcr.io/your-org/research-os-dashboard:latest docker compose -f docker-compose.release.yml pull
-RESEARCH_OS_IMAGE=ghcr.io/your-org/research-os-dashboard:latest docker compose -f docker-compose.release.yml up -d
-```
-
-For day-to-day development, keep using:
+For day-to-day use, keep using:
 
 ```sh
 docker compose up --build -d
@@ -156,8 +101,8 @@ docker compose up --build -d
 
 ## Docker Compose Example
 
-Research OS already includes a working `docker-compose.yml`. Colleagues usually
-do not need to create this file themselves.
+Research OS already includes a working `docker-compose.yml`. Most users do not
+need to create this file themselves.
 
 If someone wants to understand or recreate the local Docker Compose setup, this
 is the minimal shape:
@@ -196,22 +141,6 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-For a prebuilt image instead of local build, use `docker-compose.release.yml`
-and set `RESEARCH_OS_IMAGE`:
-
-```yaml
-services:
-  dashboard:
-    image: ghcr.io/your-org/research-os-dashboard:latest
-    container_name: research-os-dashboard
-    working_dir: /workspace/Research OS
-    command: ["python3", "research_os.py", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
-    ports:
-      - "127.0.0.1:8765:8765"
-    volumes:
-      - ..:/workspace
-    restart: unless-stopped
-```
 
 The important part is the volume mount:
 

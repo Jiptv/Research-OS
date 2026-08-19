@@ -34,6 +34,8 @@ git pull
 scripts/run-dashboard-docker.sh
 ```
 
+Docker Compose examples are in `docs/11 Colleague Setup.md`.
+
 For AI assistants opening the whole `UX Research` workspace, the share package
 also places `CLAUDE.md` and `AGENTS.md` at the `UX Research/` root. Those files
 tell Claude, Codex or another coding agent to read the Research OS instructions

@@ -154,6 +154,79 @@ For day-to-day development, keep using:
 docker compose up --build -d
 ```
 
+## Docker Compose Example
+
+Research OS already includes a working `docker-compose.yml`. Colleagues usually
+do not need to create this file themselves.
+
+If someone wants to understand or recreate the local Docker Compose setup, this
+is the minimal shape:
+
+```yaml
+services:
+  dashboard:
+    image: research-os-dashboard:local
+    build:
+      context: .
+    container_name: research-os-dashboard
+    working_dir: /workspace/Research OS
+    command: ["python3", "research_os.py", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      TZ: "Europe/Amsterdam"
+      RESEARCH_OS_HOST_WORKSPACE_DIR: "${HOME}/UX Research"
+      RESEARCH_OS_BACKUP_DIR: "/icloud/UX Research"
+    volumes:
+      - ..:/workspace
+      - "${HOME}/Library/Mobile Documents/com~apple~CloudDocs/iCloud/UX Research:/icloud/UX Research"
+    restart: unless-stopped
+```
+
+Run it from the `Research OS` folder:
+
+```sh
+cd "$HOME/UX Research/Research OS"
+docker compose up --build -d
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+For a prebuilt image instead of local build, use `docker-compose.release.yml`
+and set `RESEARCH_OS_IMAGE`:
+
+```yaml
+services:
+  dashboard:
+    image: ghcr.io/your-org/research-os-dashboard:latest
+    container_name: research-os-dashboard
+    working_dir: /workspace/Research OS
+    command: ["python3", "research_os.py", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ..:/workspace
+    restart: unless-stopped
+```
+
+The important part is the volume mount:
+
+```yaml
+volumes:
+  - ..:/workspace
+```
+
+That gives Docker access to both:
+
+```text
+UX Research/Research OS
+UX Research/Projects
+```
+
 ## Folder Shape
 
 Research OS expects this shape:

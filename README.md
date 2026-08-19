@@ -16,6 +16,24 @@ For a non-technical local installation guide, start with:
 START_HERE.md
 ```
 
+To install directly from GitHub on a Mac:
+
+```sh
+mkdir -p "$HOME/UX Research"
+git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"
+mkdir -p "$HOME/UX Research/Projects"
+cd "$HOME/UX Research/Research OS"
+scripts/run-dashboard-docker.sh
+```
+
+To update later:
+
+```sh
+cd "$HOME/UX Research/Research OS"
+git pull
+scripts/run-dashboard-docker.sh
+```
+
 For AI assistants opening the whole `UX Research` workspace, the share package
 also places `CLAUDE.md` and `AGENTS.md` at the `UX Research/` root. Those files
 tell Claude, Codex or another coding agent to read the Research OS instructions

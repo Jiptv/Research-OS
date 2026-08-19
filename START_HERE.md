@@ -44,6 +44,8 @@ Desktop is no longer showing a startup screen.
 
 ## Step 2 - Put The UX Research Folder In Your Home Folder
 
+If you received a zip file, use these steps:
+
 1. Unzip the Research OS zip file.
 2. You should see a folder named:
 
@@ -76,6 +78,36 @@ Home folder/
 ```
 
 Important: do not rename `UX Research`, `Research OS` or `Projects`.
+
+## Alternative Step 2 - Install From GitHub
+
+Use this if you received the GitHub repository link instead of a zip file.
+
+First make sure Git is available. On many Macs it is already installed. If this
+command asks you to install Apple command line tools, accept that prompt:
+
+```sh
+git --version
+```
+
+Then paste this into Terminal:
+
+```sh
+mkdir -p "$HOME/UX Research"
+git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"
+mkdir -p "$HOME/UX Research/Projects"
+cd "$HOME/UX Research/Research OS"
+```
+
+After that, continue with Step 5 below.
+
+To get Research OS updates later:
+
+```sh
+cd "$HOME/UX Research/Research OS"
+git pull
+scripts/run-dashboard-docker.sh
+```
 
 ## Step 3 - Open Terminal
 

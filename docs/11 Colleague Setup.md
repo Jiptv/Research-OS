@@ -107,11 +107,31 @@ It includes the Research OS app and an empty `Projects` folder. It does not incl
 
 Use this when colleagues should be able to pull updates.
 
-Recommended setup:
+Simple GitHub setup:
 
-- Put the `Research OS` folder in a GitHub repository.
+```sh
+mkdir -p "$HOME/UX Research"
+git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"
+mkdir -p "$HOME/UX Research/Projects"
+cd "$HOME/UX Research/Research OS"
+scripts/run-dashboard-docker.sh
+```
+
+Colleague update command:
+
+```sh
+cd "$HOME/UX Research/Research OS"
+git pull
+scripts/run-dashboard-docker.sh
+```
+
+Keep the local `UX Research/Projects` folder outside Git. Project data stays
+local by default and should not be committed to the public Research OS
+repository.
+
+Optional container-registry setup:
+
 - Publish the Docker image to GitHub Container Registry.
-- Let colleagues keep their local `UX Research/Projects` folder outside Git.
 - Let colleagues update by pulling the latest image and restarting Docker.
 
 Example image name:
@@ -120,7 +140,7 @@ Example image name:
 ghcr.io/your-org/research-os-dashboard:latest
 ```
 
-Colleague update command:
+Container-registry update command:
 
 ```sh
 cd ~/UX\ Research/Research\ OS

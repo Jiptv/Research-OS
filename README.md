@@ -18,6 +18,23 @@ START_HERE.md
 
 To install directly from GitHub on a Mac:
 
+First check whether Git is installed:
+
+```sh
+git --version
+```
+
+If a Mac popup asks you to install Apple command line tools, click install and
+wait until it finishes. Then run `git --version` again.
+
+If that does not work, install Git from:
+
+```text
+https://git-scm.com/download/mac
+```
+
+Then install Research OS:
+
 ```sh
 mkdir -p "$HOME/UX Research"
 git clone https://github.com/Jiptv/Research-OS.git "$HOME/UX Research/Research OS"

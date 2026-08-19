@@ -8,6 +8,16 @@ Research OS uses small version numbers while it is still early:
 - `v0.2.0`, `v0.3.0`, etc. for visible new features.
 - `v1.0.0` only when Research OS is stable enough for everyday use.
 
+## v0.1.5 - Git install instructions
+
+Made the GitHub setup clearer for people who do not already have Git installed.
+
+What changed:
+
+- Added a `git --version` check to the README and setup docs.
+- Explained that macOS may ask to install Apple command line tools.
+- Added the official Git for Mac download link as a fallback.
+
 ## v0.1.4 - Simpler public setup
 
 Cleaned up the public setup flow so GitHub + Docker is the main way to install

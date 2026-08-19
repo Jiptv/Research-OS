@@ -38,7 +38,29 @@ Research OS changes.
    Choose **Mac with Apple silicon** for M1/M2/M3/M4 Macs, or **Mac with Intel
    chip** for older Intel Macs.
 
-2. Open Terminal and install Research OS from GitHub:
+2. Check whether Git is installed.
+
+   Git is the tool that downloads Research OS from GitHub and pulls updates
+   later.
+
+   Paste this into Terminal:
+
+   ```sh
+   git --version
+   ```
+
+   What can happen:
+
+   - If Terminal shows a version number, Git is already installed.
+   - If a Mac popup asks you to install Apple command line tools, click install
+     and wait until it finishes. Then run `git --version` again.
+   - If that does not work, install Git from:
+
+     ```text
+     https://git-scm.com/download/mac
+     ```
+
+3. Open Terminal and install Research OS from GitHub:
 
    ```sh
    mkdir -p "$HOME/UX Research"
@@ -51,7 +73,7 @@ Research OS changes.
    avoid common macOS permission and backup issues. Research OS can still back
    up to iCloud from this local workspace.
 
-3. Start the dashboard:
+4. Start the dashboard:
 
    ```sh
    scripts/run-dashboard-docker.sh
@@ -60,7 +82,7 @@ Research OS changes.
    The first run can take a few minutes because Docker builds the local
    Research OS container.
 
-4. Open:
+5. Open:
 
    ```text
    http://127.0.0.1:8765/

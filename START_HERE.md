@@ -46,12 +46,25 @@ Desktop is no longer showing a startup screen.
 
 Research OS is installed and updated through GitHub.
 
-First make sure Git is available. On many Macs it is already installed. If this
-command asks you to install Apple command line tools, accept that prompt:
+First make sure Git is available. Git is the small tool that downloads Research
+OS from GitHub and pulls updates later.
+
+Paste this into Terminal:
 
 ```sh
 git --version
 ```
+
+What can happen:
+
+- If Terminal shows a version number, Git is already installed.
+- If a Mac popup asks you to install Apple command line tools, click install and
+  wait until it finishes. Then run `git --version` again.
+- If that does not work, install Git from:
+
+  ```text
+  https://git-scm.com/download/mac
+  ```
 
 Then paste this into Terminal:
 

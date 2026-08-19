@@ -30,6 +30,23 @@ rg -n --hidden '(your-name|company-name|internal-project-name|/Users/|Mobile Doc
 
 Expected findings should either be generic examples, local-only documentation, or deliberately excluded from the share package.
 
+## AI Transparency Note
+
+For a public or broadly shared repository, include a clear note in the README:
+
+```text
+Focused on users, automated with AI.
+
+Research OS was created and is developed with substantial AI assistance. AI can
+make mistakes. Review AI-generated research knowledge, check source
+traceability, and verify code or setup changes before trusting them in important
+work.
+```
+
+This is similar to how many AI-assisted projects disclose that parts of the code
+or documentation were generated with AI while keeping responsibility with the
+maintainer and users.
+
 ## GitHub Repository Recommendation
 
 Keep these outside the public repository:

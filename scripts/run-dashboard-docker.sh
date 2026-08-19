@@ -12,6 +12,8 @@ fi
 
 mkdir -p "$WORKSPACE_DIR/Projects"
 
+export RESEARCH_OS_HOST_WORKSPACE_DIR="$WORKSPACE_DIR"
+
 docker compose up --build -d
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do

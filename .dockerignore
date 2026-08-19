@@ -6,6 +6,7 @@ __pycache__/
 .env.*
 !.env.example
 .backup-status.json
+.round-monitoring.json
 branding/*
 !branding/.gitignore
 !branding/README.md

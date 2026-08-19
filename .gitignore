@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .backup-status.json
 .dashboard-settings.json
+.round-monitoring.json
 branding/*
 !branding/.gitignore
 !branding/README.md

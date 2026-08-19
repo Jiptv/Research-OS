@@ -2,6 +2,14 @@
 
 Research OS is an operating system for research, not a repository for reports.
 
+**Focused on users, automated with AI.**
+
+Research OS was created and is developed with substantial AI assistance. AI helps
+shape the code, documentation and research workflows, but it can make mistakes.
+Use Research OS as a researcher-controlled system: review AI-generated research
+knowledge, check source traceability, and verify code or setup changes before
+trusting them in important work.
+
 For a non-technical local installation guide, start with:
 
 ```text

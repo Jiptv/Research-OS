@@ -6038,9 +6038,10 @@ DASHBOARD_HTML = r"""<!doctype html>
     .tab-panel.active { display:block; }
     .search { width: 260px; max-width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; color: var(--text); outline: none; background: #fff; }
     .toolbar-status { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
-    .manual-refresh { height:32px; border:1px solid var(--blue); border-radius:999px; background:#fff; color:var(--blue); padding:0 13px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; box-shadow:var(--shadow-small-bottom); white-space:nowrap; }
+    .manual-refresh { height:32px; display:inline-flex; align-items:center; gap:7px; border:1px solid var(--blue); border-radius:999px; background:#fff; color:var(--blue); padding:0 13px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; box-shadow:var(--shadow-small-bottom); white-space:nowrap; }
     .manual-refresh:hover { border-color:var(--blue-dark); color:var(--blue-dark); background:#F2F6FF; }
     .manual-refresh:disabled { opacity:.6; cursor:default; }
+    .manual-refresh-icon { width:14px; height:14px; display:inline-block; flex:0 0 auto; }
     .learning-top-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; margin-bottom:12px; }
     .learning-detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; }
     .learning-detail-grid > .learning-card { height:100%; }
@@ -6348,7 +6349,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       </aside>
       <main>
         <section class="tab-panel active" id="dashboardPanel">
-          <section class="toolbar"><div class="toolbar-left"><input class="search" id="search" type="search" placeholder="Search projects"><div class="toolbar-actions" id="toolbarActions"></div></div><div class="toolbar-status"><button class="manual-refresh" id="refreshButton" type="button">Refresh dashboard</button><span>Auto every <span id="refreshMinutes">15</span> min</span></div></section>
+          <section class="toolbar"><div class="toolbar-left"><input class="search" id="search" type="search" placeholder="Search projects"><div class="toolbar-actions" id="toolbarActions"></div></div><div class="toolbar-status"><button class="manual-refresh" id="refreshButton" type="button" data-label="Refresh dashboard"><svg class="manual-refresh-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z"/></svg><span>Refresh dashboard</span></button><span>Auto every <span id="refreshMinutes">15</span> min</span></div></section>
           <section id="projects"></section>
         </section>
         <section class="tab-panel" id="learningPanel"></section>
@@ -7270,7 +7271,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       dashboardRefreshing = true;
       if (refreshButton) {
         refreshButton.disabled = true;
-        refreshButton.textContent = "Refreshing...";
+        const label = refreshButton.querySelector("span");
+        if (label) label.textContent = "Refreshing...";
       }
       setDashboardLoading(isInitialLoad);
       if (isInitialLoad) setUpdatedText("Loading...");
@@ -7284,7 +7286,8 @@ DASHBOARD_HTML = r"""<!doctype html>
         dashboardRefreshing = false;
         if (refreshButton) {
           refreshButton.disabled = false;
-          refreshButton.textContent = "Refresh dashboard";
+          const label = refreshButton.querySelector("span");
+          if (label) label.textContent = refreshButton.dataset.label || "Refresh dashboard";
         }
         setDashboardLoading(false);
       }

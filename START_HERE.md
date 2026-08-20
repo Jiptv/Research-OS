@@ -20,6 +20,36 @@ In this guide you will:
 8. Use the purple AI buttons in the dashboard to copy Research OS prompts, then
    paste those prompts into your AI tool.
 
+## How Research OS Works
+
+Research OS is a local dashboard plus local folders. The AI tool does the
+research processing by reading and editing those same folders.
+
+```text
+Your Mac
++--------------------------------------------------------------+
+| ~/UX Research                                                |
+|                                                              |
+|  +---------------------+        +-------------------------+  |
+|  | Research OS         |        | Projects                |  |
+|  | dashboard + scripts |        | sources + reviews      |  |
+|  |                     |        | evidence + deliverables |  |
+|  +----------+----------+        +-----------^-------------+  |
+|             |                               |                |
+|             | reads status                  | reads/writes    |
+|             v                               |                |
+|  +---------------------+   copy prompt   +--+--------------+ |
+|  | Browser dashboard   | --------------> | AI tool         | |
+|  | review + status UI  | <-------------- | Codex or Claude | |
+|  +---------------------+   refresh UI    +-----------------+ |
+|                                                              |
++--------------------------------------------------------------+
+```
+
+The dashboard does not make AI decisions by itself. It shows status, reviews and
+purple AI prompt buttons. You copy those prompts into your AI tool, the AI tool
+updates the local files, and the dashboard refreshes to show what changed.
+
 ## What You Will Get
 
 After setup, you open Research OS in your browser:

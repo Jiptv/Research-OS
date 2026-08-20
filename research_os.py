@@ -6258,6 +6258,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     .tip a:hover { text-decoration: underline; }
     .gate-accept-note { margin-top: 10px; color: #6c7483; font-size: 11px; line-height: 1.4; }
     .prompt-explain { margin-top: 8px; border-left: 3px solid var(--ai-purple); padding: 7px 9px; background:var(--ai-purple-bg); color:var(--fg-2); font-size:12px; line-height:1.45; }
+    .prompt-use { margin-top: 8px; border:1px solid rgba(124,58,237,.18); border-radius:8px; background:#fff; color:var(--fg-2); padding:7px 9px; font-size:12px; line-height:1.45; }
+    .prompt-use strong { display:block; color:var(--fg-1); font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:2px; }
     .prompt-explain strong { display:block; margin-bottom:3px; color:var(--fg-1); font-size:11px; text-transform:uppercase; letter-spacing:.003em; }
     .copy {
       margin-top: 9px; height: 26px; border: 1px solid rgba(124,58,237,.35); border-radius: 12px;
@@ -6458,7 +6460,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       const defaultPromptDescription = "Codex/Cowork uses this prompt to work on this part of Research OS directly. It should follow the prompt rules, avoid backend/API generation, update the relevant documents, and leave review decisions to you.";
       const promptDescription = action.prompt_description ? escapeHtml(action.prompt_description) : (prompt ? defaultPromptDescription : "");
       const explanation = promptDescription ? `<div class="prompt-explain"><strong>What this does</strong>${promptDescription}</div>` : "";
-      const promptTools = prompt ? explanation : "";
+      const promptUse = prompt ? `<div class="prompt-use"><strong>How to use this</strong>Click the purple AI button to copy the prompt. Then paste it into Codex, Claude or another AI tool that has access to your <code>UX Research</code> folder.</div>` : "";
+      const promptTools = prompt ? `${promptUse}${explanation}` : "";
       const qualityGates = Array.isArray(action.quality_gates) ? action.quality_gates : [];
       const waivableChecks = qualityGates.filter(gate => gate.id !== "PAT-SYNTHESIS-STALE");
       const gateTools = waivableChecks.length ? `<div class="gate-accept-note">Checks reviewed and acceptable?</div><button class="copy" type="button" data-waive-gates="${encodeURIComponent(JSON.stringify(waivableChecks))}" data-waive-path="${escapeHtml(action.quality_gate_path || "")}">Mark checks acceptable</button>` : "";

@@ -5,6 +5,21 @@ This guide is for someone who has never used Research OS before.
 You do not need to code. You only need to install Docker Desktop, put the folder
 in the right place and paste one command into Terminal.
 
+## Quick Overview
+
+In this guide you will:
+
+1. Install Docker Desktop so Research OS can run locally.
+2. Check or install Git so your Mac can download Research OS from GitHub.
+3. Pull Research OS from GitHub into `~/UX Research/Research OS`.
+4. Create the local `~/UX Research/Projects` folder for research work.
+5. Start the Research OS dashboard in your browser.
+6. Connect Codex, Claude or another AI tool to the full `~/UX Research` folder.
+7. Paste the first orientation prompt so the AI tool reads the Research OS
+   instructions before changing files.
+8. Use the purple AI buttons in the dashboard to copy Research OS prompts, then
+   paste those prompts into your AI tool.
+
 ## What You Will Get
 
 After setup, you open Research OS in your browser:
@@ -271,6 +286,20 @@ and what the next safe Research OS action is. Do not change files yet.
 ```
 
 This helps the assistant orient itself before doing work.
+
+### How Dashboard Prompts Work
+
+Research OS does not run AI work by itself. The dashboard shows purple AI
+buttons for work that should be done by Codex, Claude or another AI tool.
+
+Use them like this:
+
+1. Click the purple AI button in the dashboard.
+2. The prompt is copied to your clipboard.
+3. Paste that prompt into your AI tool.
+4. Let the AI tool work in the local `~/UX Research` folder.
+5. Return to the dashboard to review changes, check status or copy the next
+   prompt.
 
 ### Codex / ChatGPT Desktop
 

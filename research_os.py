@@ -6024,11 +6024,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     .backup-button:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
     .backup-button:disabled { opacity:.55; cursor:default; }
     .layout { display: grid; grid-template-columns: 64px 1fr; align-items:start; min-height: calc(100vh - 56px); background: var(--panel); box-shadow: var(--shadow); }
-    .rail { position: sticky; top: 56px; z-index: 30; width: 64px; height: calc(100vh - 56px); border-right: 1px solid var(--line); padding-top: 18px; display:flex; flex-direction:column; align-items:stretch; gap:8px; color: var(--fg-2); background: var(--panel); overflow-y:auto; }
-    .rail-tab { width: 100%; height: 34px; border-radius: 0; border: 0; background: transparent; color: var(--fg-2); display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
+    .rail { position: sticky; top: 56px; z-index: 30; width: 64px; height: calc(100vh - 56px); border-right: 1px solid var(--line); padding: 18px 0 18px; display:flex; flex-direction:column; align-items:stretch; gap:0; color: var(--fg-2); background: var(--panel); overflow-y:auto; }
+    .rail-tab { width: 100%; height: 48px; border-radius: 0; border: 0; background: transparent; color: var(--fg-2); display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
     .rail-tab:hover { background:#FBFBFA; color:var(--fg-1); }
     .rail-tab.active { color: var(--blue); background: #F2F6FF; }
     .rail-icon { width: 24px; height: 24px; display:block; flex:0 0 auto; background: currentColor; -webkit-mask: var(--icon) center / 24px 24px no-repeat; mask: var(--icon) center / 24px 24px no-repeat; }
+    .rail-spacer { flex: 1 1 auto; min-height: 18px; }
     main { padding: 22px 34px 42px; min-width: 0; }
     h1 { margin:0; font-size: 24px; font-weight: 700; color: var(--fg-1); line-height: 1.2; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin: 0 0 14px; }
@@ -6117,6 +6118,36 @@ DASHBOARD_HTML = r"""<!doctype html>
     .settings-save:hover, .settings-reset:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
     .settings-note-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
     .settings-note-list li { color:var(--fg-2); font-size:12px; line-height:1.4; }
+    .onboarding { display:grid; gap:12px; max-width:1120px; }
+    .onboarding-hero { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:18px; display:grid; grid-template-columns:1fr 280px; gap:18px; align-items:center; overflow:hidden; }
+    .onboarding-hero h2 { margin:0; color:var(--fg-1); font-size:20px; line-height:1.2; }
+    .onboarding-hero p { margin:8px 0 0; max-width:760px; color:var(--fg-2); font-size:13px; line-height:1.45; }
+    .onboarding-hero .phase-status { margin-top:12px; }
+    .onboarding-mini-dashboard { border:1px solid var(--line); border-radius:12px; background:var(--surface-subtle); padding:10px; display:grid; gap:8px; }
+    .onboarding-mini-head { min-height:28px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .onboarding-mini-title { font-size:12px; font-weight:750; color:var(--fg-1); }
+    .onboarding-stage { display:grid; grid-template-columns:92px 1fr auto; gap:8px; align-items:center; min-height:26px; font-size:11px; color:var(--fg-2); }
+    .onboarding-stage strong { font-size:11px; color:var(--fg-2); }
+    .onboarding-stage .bar { height:6px; }
+    .onboarding-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+    .onboarding-card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:14px; min-width:0; display:grid; gap:10px; align-content:start; }
+    .onboarding-card h3 { margin:0 0 8px; color:var(--fg-1); font-size:14px; line-height:1.25; }
+    .onboarding-card p { margin:0; color:var(--fg-2); font-size:12px; line-height:1.45; }
+    .onboarding-card ul, .onboarding-card ol { margin:0; padding-left:18px; color:var(--fg-2); font-size:12px; line-height:1.45; }
+    .onboarding-card li + li { margin-top:5px; }
+    .onboarding-card strong { color:var(--fg-1); }
+    .onboarding-empty { border:1px dashed var(--border-1); border-radius:12px; background:#fff; padding:18px; color:var(--fg-2); text-align:left; }
+    .onboarding-empty h2 { margin:0 0 6px; color:var(--fg-1); font-size:18px; line-height:1.25; }
+    .onboarding-empty p { margin:0 0 12px; color:var(--fg-2); font-size:13px; line-height:1.45; max-width:780px; }
+    .onboarding-empty .onboarding-grid { margin-top:12px; }
+    .onboarding-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+    .onboarding-folder-card { border:1px solid var(--line); border-radius:10px; background:var(--surface-subtle); overflow:hidden; }
+    .onboarding-folder-row { display:grid; grid-template-columns:8px 1fr auto; gap:8px; align-items:center; min-height:34px; padding:0 10px; border-bottom:1px solid var(--line); font-size:12px; color:var(--fg-2); }
+    .onboarding-folder-row:last-child { border-bottom:0; }
+    .onboarding-folder-row strong { color:var(--fg-1); font-size:12px; }
+    .onboarding-pill-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .onboarding-pill { min-height:24px; display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 9px; color:var(--fg-2); font-size:11px; font-weight:650; }
+    .learning-intro { margin-bottom:12px; }
     .project { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; overflow: visible; background: #fff; box-shadow: var(--shadow-small-bottom); }
     .row { display:grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items:center; min-height: 58px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
     .project > .row { grid-template-columns: 28px 46px 1fr auto; }
@@ -6287,7 +6318,6 @@ DASHBOARD_HTML = r"""<!doctype html>
     .toast { position: fixed; left: 50%; bottom: 18px; z-index: 1200; max-width: min(420px, calc(100vw - 36px)); border:1px solid var(--line); border-radius:12px; background:#222; color:#fff; box-shadow:0 14px 34px rgba(32,43,64,.18); padding:10px 12px; font-size:12px; font-weight:400; opacity:0; transform:translate(-50%, 8px); pointer-events:none; transition:opacity .16s ease, transform .16s ease; }
     .toast.show { opacity:1; transform:translate(-50%, 0); }
     .empty { border: 1px dashed var(--border-1); border-radius: 12px; padding: 34px; color: var(--muted); text-align:center; background:#fff; }
-    .rail { display:flex; flex-direction:column; align-items:stretch; gap:8px; padding-top:18px; }
     .inline-viewer { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
     .inline-viewer-head { min-height: 36px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding: 0 10px; border-bottom: 1px solid var(--line); background:var(--surface-subtle); }
     .inline-viewer-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; color:var(--fg-2); }
@@ -6299,12 +6329,16 @@ DASHBOARD_HTML = r"""<!doctype html>
     @media (max-width: 760px) {
       .topbar, .layout { border-radius: 0; box-shadow: none; }
       .layout { grid-template-columns: 1fr; }
-      .rail { top:56px; width:auto; height:auto; min-height: 44px; border-right:0; border-bottom:1px solid var(--line); padding:7px 14px; flex-direction:row; justify-content:flex-start; overflow-x:auto; overflow-y:hidden; }
+      .rail { top:56px; width:auto; height:auto; min-height: 44px; border-right:0; border-bottom:1px solid var(--line); padding:0 14px; flex-direction:row; justify-content:flex-start; overflow-x:auto; overflow-y:hidden; }
+      .rail-tab { width:48px; height:44px; flex:0 0 auto; }
+      .rail-spacer { flex:0 0 auto; min-width:8px; min-height:0; }
       main { padding: 20px 14px 30px; }
       .toolbar { align-items:flex-start; flex-direction:column; }
       .learning-top-grid { grid-template-columns: 1fr; }
       .learning-detail-grid { grid-template-columns:1fr; }
       .learning-context-points { grid-template-columns:1fr; }
+      .onboarding-grid { grid-template-columns:1fr; }
+      .onboarding-hero { grid-template-columns:1fr; }
       .row { grid-template-columns: 28px 1fr; }
       .project > .row { grid-template-columns: 28px 44px 1fr; }
       .round .row { grid-template-columns: 28px 1fr auto; }
@@ -6343,6 +6377,10 @@ DASHBOARD_HTML = r"""<!doctype html>
         <button class="rail-tab" type="button" data-tab="learning" title="Looped Learning" aria-label="Looped Learning">
           <span class="rail-icon" style="--icon: url('/assets/icons/lightbulb.svg')" aria-hidden="true"></span>
         </button>
+        <div class="rail-spacer" aria-hidden="true"></div>
+        <button class="rail-tab" type="button" data-tab="about" title="Research OS basics" aria-label="Research OS basics">
+          <span class="rail-icon" style="--icon: url('/assets/icons/info.svg')" aria-hidden="true"></span>
+        </button>
         <button class="rail-tab" type="button" data-tab="settings" title="Settings" aria-label="Settings">
           <span class="rail-icon" style="--icon: url('/assets/icons/settings.svg')" aria-hidden="true"></span>
         </button>
@@ -6353,6 +6391,7 @@ DASHBOARD_HTML = r"""<!doctype html>
           <section id="projects"></section>
         </section>
         <section class="tab-panel" id="learningPanel"></section>
+        <section class="tab-panel" id="aboutPanel"></section>
         <section class="tab-panel" id="settingsPanel"></section>
       </main>
     </div>
@@ -6841,7 +6880,11 @@ DASHBOARD_HTML = r"""<!doctype html>
         instruction: metrics.signals_waiting ? "New review feedback is waiting to be processed into learning suggestions." : "Looped Learning is up to date. You can still ask Codex to check whether active learnings and suggestions are consistent.",
         prompt: metrics.prompt || ""
       }, "prompt");
-      return `<div class="learning-top-grid">
+      return `<section class="learning-card learning-intro">
+        <h2>Looped Learning</h2>
+        <p>This page shows what Research OS is learning from your review feedback. It tracks review notes, turns recurring feedback into reusable Research OS-wide suggestions, and shows which active learnings should guide future Codex or Claude synthesis.</p>
+      </section>
+      <div class="learning-top-grid">
         <section class="learning-card">
           <h2>Learning loop status</h2>
           <p>${escapeHtml(learningSentence)}</p>
@@ -6867,6 +6910,87 @@ DASHBOARD_HTML = r"""<!doctype html>
           <p>The last Research OS-wide rules that were approved from your review feedback.</p>
           ${recentLearningList(metrics.recent_active_learnings, metrics.active_learnings_href)}
         </section>
+      </div>`;
+    }
+    function onboardingBasics(mode = "tab") {
+      const empty = mode === "empty";
+      const action = info(newProjectAction(), "prompt");
+      const miniDashboard = `<div class="onboarding-mini-dashboard" aria-hidden="true">
+        <div class="onboarding-mini-head"><div class="onboarding-mini-title">Example round status</div><span class="phase-status yellow">${dot("yellow")}2 to review</span></div>
+        <div class="onboarding-stage"><strong>Sources</strong><div class="bar"><span class="fill green only" style="width:100%"></span></div><span class="badge green">${dot("green")}ready</span></div>
+        <div class="onboarding-stage"><strong>Evidence</strong><div class="bar"><span class="fill green only" style="width:100%"></span></div><span class="badge green">${dot("green")}curated</span></div>
+        <div class="onboarding-stage"><strong>Patterns</strong><div class="bar"><span class="fill yellow" style="width:35%"></span><span class="fill green" style="width:65%"></span></div><span class="badge yellow">${dot("yellow")}review</span></div>
+        <div class="onboarding-stage"><strong>Output</strong><div class="bar"><span class="fill gray only" style="width:100%"></span></div><span class="badge gray">${dot("gray")}later</span></div>
+      </div>`;
+      const intro = empty
+        ? `<section class="onboarding-empty"><h2>Start with your first research project</h2><p>Research OS turns source material into traceable research knowledge and then into deliverables. First, ask Codex or Claude to read this workspace, then create a project for the product area or topic you want to track.</p><div class="onboarding-actions">${action}</div></section>`
+        : `<section class="onboarding-hero"><div><h2>Research OS basics</h2><p>Research OS is a local workspace for turning research sources into evidence, patterns, insights, recommendations and reviewable deliverables. AI helps process and draft; you stay in control of what gets accepted.</p><span class="phase-status green">${dot("green")}Researcher-controlled knowledge pipeline</span></div>${miniDashboard}</section>`;
+      return `<div class="onboarding">
+        ${intro}
+        <div class="onboarding-grid">
+          <section class="onboarding-card">
+            <h3>How the workspace is organized</h3>
+            <div class="onboarding-folder-card">
+              <div class="onboarding-folder-row"><span class="dot blue"></span><strong>Project</strong><span>long-running topic</span></div>
+              <div class="onboarding-folder-row"><span class="dot green"></span><strong>Round</strong><span>one study or cycle</span></div>
+              <div class="onboarding-folder-row"><span class="dot yellow"></span><strong>Input</strong><span>source material</span></div>
+              <div class="onboarding-folder-row"><span class="dot gray"></span><strong>Output</strong><span>deliverables</span></div>
+            </div>
+            <p>Projects are long-running product areas or topics. Rounds are individual studies, interview batches, evaluations or synthesis cycles inside a project.</p>
+          </section>
+          <section class="onboarding-card">
+            <h3>What you can put in input folders</h3>
+            <div class="onboarding-pill-list">
+              <span class="onboarding-pill">project context</span>
+              <span class="onboarding-pill">transcripts</span>
+              <span class="onboarding-pill">presentations</span>
+              <span class="onboarding-pill">PDFs</span>
+              <span class="onboarding-pill">research notes</span>
+              <span class="onboarding-pill">screenshots</span>
+              <span class="onboarding-pill">survey exports</span>
+              <span class="onboarding-pill">product docs</span>
+            </div>
+            <p>Use project input for durable background. Use round input for material from a specific study.</p>
+          </section>
+          <section class="onboarding-card">
+            <h3>How the pipeline works</h3>
+            <div class="onboarding-mini-dashboard">
+              <div class="onboarding-stage"><strong>Sources</strong><div class="bar"><span class="fill blue only" style="width:100%"></span></div><span>input</span></div>
+              <div class="onboarding-stage"><strong>Evidence</strong><div class="bar"><span class="fill green only" style="width:100%"></span></div><span>observed</span></div>
+              <div class="onboarding-stage"><strong>Patterns</strong><div class="bar"><span class="fill yellow only" style="width:100%"></span></div><span>review</span></div>
+              <div class="onboarding-stage"><strong>Insights</strong><div class="bar"><span class="fill yellow only" style="width:100%"></span></div><span>meaning</span></div>
+              <div class="onboarding-stage"><strong>Recs</strong><div class="bar"><span class="fill green only" style="width:100%"></span></div><span>next</span></div>
+            </div>
+            <p>The AI moves one safe stage at a time. Evidence stays source-faithful; you review the synthesis layers before they feed deliverables.</p>
+          </section>
+          <section class="onboarding-card">
+            <h3>How the purple AI buttons work</h3>
+            <div class="onboarding-actions">${info({
+              label: "Example AI prompt",
+              button_label: "AI prompt",
+              copy_label: "example onboarding",
+              instruction: "Purple AI buttons copy a ready-made prompt for Codex, Claude or another AI tool.",
+              prompt_description: "This is an example only. In the dashboard, each purple button copies a prompt for that exact project, round, stage or deliverable.",
+              prompt: "Paste dashboard prompts into Codex or Claude when you want the AI to work on your local Research OS files."
+            }, "prompt")}</div>
+            <ol>
+              <li>Click a purple AI button to copy the right prompt.</li>
+              <li>Paste it into Codex, Claude or another AI tool that can access your <code>UX Research</code> folder.</li>
+              <li>The AI updates local Research OS files and reports what changed.</li>
+              <li>Refresh the dashboard, then review anything marked yellow.</li>
+            </ol>
+          </section>
+          <section class="onboarding-card">
+            <h3>Your first steps</h3>
+            <ol>
+              <li>Ask Codex or Claude to read the Research OS files and inspect the workspace.</li>
+              <li>Create your first project from the dashboard.</li>
+              <li>Add project context sources if you have durable background.</li>
+              <li>Create a round, add transcripts or notes, then use Run input.</li>
+              <li>Review what needs your judgment, then continue synthesis stage by stage.</li>
+            </ol>
+          </section>
+        </div>
       </div>`;
     }
     function renderSettings(settings) {
@@ -6925,6 +7049,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.querySelectorAll(".rail-tab").forEach(button => button.classList.toggle("active", button.dataset.tab === tab));
       document.getElementById("dashboardPanel").classList.toggle("active", tab === "dashboard");
       document.getElementById("learningPanel").classList.toggle("active", tab === "learning");
+      document.getElementById("aboutPanel").classList.toggle("active", tab === "about");
       document.getElementById("settingsPanel").classList.toggle("active", tab === "settings");
     }
     function inlineTitleFromLink(link) {
@@ -7023,8 +7148,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.getElementById("toolbarActions").innerHTML = info(newProjectAction(), "prompt");
       const q = document.getElementById("search").value.trim().toLowerCase();
       const projects = payload.projects.filter(project => !q || project.name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q));
-      document.getElementById("projects").innerHTML = projects.length ? projects.map(renderProject).join("") : `<div class="empty">No matching projects.</div>`;
+      document.getElementById("projects").innerHTML = payload.projects.length ? (projects.length ? projects.map(renderProject).join("") : `<div class="empty">No matching projects.</div>`) : onboardingBasics("empty");
       document.getElementById("learningPanel").innerHTML = renderLearning(payload.looped_learning || {});
+      document.getElementById("aboutPanel").innerHTML = onboardingBasics("tab");
       document.getElementById("settingsPanel").innerHTML = renderSettings(payload.settings || {});
       setActiveTab(activeTab);
       document.querySelectorAll("[data-toggle]").forEach(button => button.addEventListener("click", () => { const id = button.getAttribute("data-toggle"); const container = button.closest(".project-info-section, .project, .round"); saveOpen(id, !container.classList.contains("open")); render(lastPayload); }));

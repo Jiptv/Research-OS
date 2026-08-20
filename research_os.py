@@ -235,6 +235,7 @@ def load_dashboard_settings() -> dict:
         "workspace_dir": str(WORKSPACE_ROOT),
         "projects_dir": str(PROJECTS_DIR if PROJECTS_DIR.exists() or not LEGACY_PROJECTS_DIR.exists() else LEGACY_PROJECTS_DIR),
         "backup_dir": str(default_backup_dir()),
+        "backup_enabled": False,
         "refresh_seconds": DASHBOARD_REFRESH_SECONDS,
         "default_research_lens": DEFAULT_RESEARCH_LENS,
     }
@@ -255,6 +256,7 @@ def load_dashboard_settings() -> dict:
         settings["refresh_seconds"] = max(30, min(3600, int(data.get("refresh_seconds", defaults["refresh_seconds"]))))
     except (TypeError, ValueError):
         settings["refresh_seconds"] = defaults["refresh_seconds"]
+    settings["backup_enabled"] = data.get("backup_enabled") is True
     lens = lens_key(str(data.get("default_research_lens", defaults["default_research_lens"])))
     known_lenses = {item["key"] for item in available_research_lenses()}
     settings["default_research_lens"] = lens if lens in known_lenses else DEFAULT_RESEARCH_LENS
@@ -273,6 +275,8 @@ def save_dashboard_settings(data: dict) -> dict:
             next_settings["refresh_seconds"] = max(30, min(3600, int(data.get("refresh_seconds"))))
         except (TypeError, ValueError):
             raise ValueError("Refresh interval must be a number of seconds.")
+    if "backup_enabled" in data:
+        next_settings["backup_enabled"] = data.get("backup_enabled") is True
     if "default_research_lens" in data:
         lens = lens_key(str(data.get("default_research_lens", "")))
         known_lenses = {item["key"] for item in available_research_lenses()}
@@ -285,6 +289,7 @@ def save_dashboard_settings(data: dict) -> dict:
             {
                 "projects_dir": next_settings["projects_dir"],
                 "backup_dir": next_settings["backup_dir"],
+                "backup_enabled": next_settings["backup_enabled"],
                 "refresh_seconds": next_settings["refresh_seconds"],
                 "default_research_lens": next_settings["default_research_lens"],
             },
@@ -4318,14 +4323,17 @@ def build_dashboard_payload() -> dict:
 
 def backup_status() -> dict:
     settings = load_dashboard_settings()
+    if not settings.get("backup_enabled"):
+        return {"status": "disabled", "enabled": False, "last_backup_at": "", "started_at": "", "message": "iCloud backup is off.", "backup_dir": settings["backup_dir"]}
     if not BACKUP_STATUS_FILE.exists():
-        return {"status": "never", "last_backup_at": "", "started_at": "", "message": "Not backed up yet.", "backup_dir": settings["backup_dir"]}
+        return {"status": "never", "enabled": True, "last_backup_at": "", "started_at": "", "message": "Not backed up yet.", "backup_dir": settings["backup_dir"]}
     try:
         data = json.loads(read_text(BACKUP_STATUS_FILE))
     except json.JSONDecodeError:
-        return {"status": "unknown", "last_backup_at": "", "started_at": "", "message": "Backup status could not be read.", "backup_dir": settings["backup_dir"]}
+        return {"status": "unknown", "enabled": True, "last_backup_at": "", "started_at": "", "message": "Backup status could not be read.", "backup_dir": settings["backup_dir"]}
     return {
         "status": data.get("status", "unknown"),
+        "enabled": True,
         "last_backup_at": data.get("last_backup_at", ""),
         "started_at": data.get("started_at", ""),
         "finished_at": data.get("finished_at", ""),
@@ -4351,6 +4359,8 @@ def backup_running_is_fresh(current: dict) -> bool:
 def start_backup_to_icloud() -> dict:
     current = backup_status()
     settings = load_dashboard_settings()
+    if not settings.get("backup_enabled"):
+        return current
     backup_dir = Path(settings["backup_dir"]).expanduser()
     if backup_running_is_fresh(current):
         return current
@@ -6006,6 +6016,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .dashboard-loading-text { font-size:13px; font-weight:650; color:var(--fg-2); }
     @keyframes hourglass-pulse { 0%, 100% { opacity:.45; transform:scale(.96); } 50% { opacity:1; transform:scale(1.06); } }
     .backup-status { height:26px; display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 8px; color:var(--fg-2); font-size:11px; white-space:nowrap; }
+    .backup-status[hidden], .backup-button[hidden] { display:none; }
     .backup-status.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-bg); color:var(--status-warning); }
     .backup-status.green { border-color:var(--status-success-bg); background:var(--status-success-bg); color:var(--status-success); }
     .backup-status.red { border-color:var(--status-danger-bg); background:var(--status-danger-bg); color:var(--status-danger); }
@@ -6027,8 +6038,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     .tab-panel.active { display:block; }
     .search { width: 260px; max-width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; color: var(--text); outline: none; background: #fff; }
     .toolbar-status { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
-    .manual-refresh { height:26px; border:1px solid var(--border-1); border-radius:12px; background:#fff; color:var(--fg-2); padding:0 9px; font:inherit; font-size:11px; font-weight:650; cursor:pointer; }
-    .manual-refresh:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
+    .manual-refresh { height:32px; border:1px solid var(--blue); border-radius:999px; background:#fff; color:var(--blue); padding:0 13px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; box-shadow:var(--shadow-small-bottom); white-space:nowrap; }
+    .manual-refresh:hover { border-color:var(--blue-dark); color:var(--blue-dark); background:#F2F6FF; }
+    .manual-refresh:disabled { opacity:.6; cursor:default; }
     .learning-top-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; margin-bottom:12px; }
     .learning-detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; align-items:stretch; }
     .learning-detail-grid > .learning-card { height:100%; }
@@ -6094,6 +6106,10 @@ DASHBOARD_HTML = r"""<!doctype html>
     .settings-field input[readonly] { background:var(--bg-2); color:var(--fg-3); }
     .settings-path-display { min-height:34px; display:flex; align-items:center; width:100%; min-width:0; border:1px solid var(--line); border-radius:8px; background:var(--bg-2); color:var(--fg-2); padding:7px 10px; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
     .settings-meta { color:var(--muted); font-size:11px; line-height:1.35; }
+    .settings-toggle { display:flex; align-items:flex-start; gap:9px; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--surface-subtle); }
+    .settings-toggle input { width:16px; height:16px; margin:1px 0 0; flex:0 0 auto; accent-color:var(--ai-purple); }
+    .settings-toggle strong { display:block; color:var(--fg-1); font-size:12px; line-height:1.25; }
+    .settings-toggle span { display:block; margin-top:3px; color:var(--muted); font-size:11px; line-height:1.35; }
     .settings-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .settings-save, .settings-reset { height:28px; border:1px solid var(--border-1); border-radius:8px; background:#fff; color:var(--fg-2); padding:0 10px; font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
     .settings-save { border-color:rgba(124,58,237,.35); color:var(--ai-purple); }
@@ -6317,7 +6333,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar"><div class="brand"><div class="mark">R</div><span>Research OS</span></div><div class="top-status"><div class="backup-status gray" id="backupStatus">Backup: loading</div><button class="backup-button" id="backupButton" type="button">Sync to iCloud</button><div class="updated" id="updated"><span id="updatedText">Loading...</span></div></div></header>
+    <header class="topbar"><div class="brand"><div class="mark">R</div><span>Research OS</span></div><div class="top-status"><div class="backup-status gray" id="backupStatus" hidden>Backup: loading</div><button class="backup-button" id="backupButton" type="button" hidden>Sync to iCloud</button><div class="updated" id="updated"><span id="updatedText">Loading...</span></div></div></header>
     <div class="layout">
       <aside class="rail" aria-label="Research OS sections">
         <button class="rail-tab active" type="button" data-tab="dashboard" title="Dashboard" aria-label="Dashboard">
@@ -6332,7 +6348,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       </aside>
       <main>
         <section class="tab-panel active" id="dashboardPanel">
-          <section class="toolbar"><div class="toolbar-left"><input class="search" id="search" type="search" placeholder="Search projects"><div class="toolbar-actions" id="toolbarActions"></div></div><div class="toolbar-status"><button class="manual-refresh" id="refreshButton" type="button">Refresh</button><span>Auto every <span id="refreshMinutes">15</span> min</span></div></section>
+          <section class="toolbar"><div class="toolbar-left"><input class="search" id="search" type="search" placeholder="Search projects"><div class="toolbar-actions" id="toolbarActions"></div></div><div class="toolbar-status"><button class="manual-refresh" id="refreshButton" type="button">Refresh dashboard</button><span>Auto every <span id="refreshMinutes">15</span> min</span></div></section>
           <section id="projects"></section>
         </section>
         <section class="tab-panel" id="learningPanel"></section>
@@ -6874,10 +6890,14 @@ DASHBOARD_HTML = r"""<!doctype html>
               <input id="projectsDir" name="projects_dir" type="text" value="${escapeHtml(item.projects_display_dir || item.projects_dir || "")}" autocomplete="off" spellcheck="false">
               <div class="settings-meta">Mac folder for research projects. Keep this next to the Research OS folder, for example in your UX Research workspace.</div>
             </div>
+            <label class="settings-toggle" for="backupEnabled">
+              <input id="backupEnabled" name="backup_enabled" type="checkbox" ${item.backup_enabled ? "checked" : ""}>
+              <span><strong>Show iCloud backup controls</strong><span>Off by default. Turn this on if you want Research OS to show backup status and the Sync to iCloud button on the dashboard.</span></span>
+            </label>
             <div class="settings-field">
               <label for="backupDir">Backup destination</label>
               <input id="backupDir" name="backup_dir" type="text" value="${escapeHtml(item.backup_dir || "")}" autocomplete="off" spellcheck="false">
-              <div class="settings-meta">The backup button syncs both Research OS and Projects into this backup folder.</div>
+              <div class="settings-meta">Used only when iCloud backup controls are enabled. The backup button syncs both Research OS and Projects into this backup folder.</div>
             </div>
             <div class="settings-field">
               <label for="refreshMinutesInput">Dashboard refresh interval</label>
@@ -6956,6 +6976,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       const el = document.getElementById("backupStatus");
       const button = document.getElementById("backupButton");
       const state = status.status || "unknown";
+      const enabled = status.enabled !== false;
+      el.hidden = !enabled;
+      button.hidden = !enabled;
+      if (!enabled) return;
       el.className = `backup-status ${state === "ok" ? "green" : state === "running" ? "yellow" : state === "error" ? "red" : "gray"}`;
       if (state === "running") {
         el.textContent = `Backup: running · last ${formatBackupTime(status.last_backup_at)}`;
@@ -7189,6 +7213,7 @@ DASHBOARD_HTML = r"""<!doctype html>
           const payload = {
             projects_dir: document.getElementById("projectsDir").value.trim(),
             backup_dir: document.getElementById("backupDir").value.trim(),
+            backup_enabled: document.getElementById("backupEnabled").checked,
             refresh_seconds: Math.max(1, Number(document.getElementById("refreshMinutesInput").value || 15)) * 60,
             default_research_lens: document.getElementById("defaultResearchLens").value
           };
@@ -7241,7 +7266,12 @@ DASHBOARD_HTML = r"""<!doctype html>
       }
       if (dashboardRefreshing) return;
       const isInitialLoad = !lastPayload;
+      const refreshButton = document.getElementById("refreshButton");
       dashboardRefreshing = true;
+      if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = "Refreshing...";
+      }
       setDashboardLoading(isInitialLoad);
       if (isInitialLoad) setUpdatedText("Loading...");
       try {
@@ -7252,6 +7282,10 @@ DASHBOARD_HTML = r"""<!doctype html>
         setUpdatedText("Refresh failed");
       } finally {
         dashboardRefreshing = false;
+        if (refreshButton) {
+          refreshButton.disabled = false;
+          refreshButton.textContent = "Refresh dashboard";
+        }
         setDashboardLoading(false);
       }
     }
@@ -7499,8 +7533,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 settings = save_dashboard_settings(payload)
-                for key in ("projects_dir", "backup_dir"):
-                    Path(settings[key]).expanduser().mkdir(parents=True, exist_ok=True)
+                Path(settings["projects_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
+                if settings.get("backup_enabled"):
+                    Path(settings["backup_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
                 invalidate_dashboard_cache()
             except Exception as exc:
                 self.send_json({"error": str(exc)}, status=400)

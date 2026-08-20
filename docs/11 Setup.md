@@ -71,7 +71,8 @@ Research OS changes.
 
    Keep the active workspace outside `Documents`, Desktop and iCloud Drive to
    avoid common macOS permission and backup issues. Research OS can still back
-   up to iCloud from this local workspace.
+   up to iCloud from this local workspace if backup is turned on in Settings.
+   Backup controls are hidden by default for new installs.
 
 4. Start the dashboard:
 

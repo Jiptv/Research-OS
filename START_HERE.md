@@ -122,7 +122,8 @@ cd "$HOME/UX Research/Research OS"
 
 This keeps the active Research OS workspace outside `Documents`, Desktop and
 iCloud Drive. That avoids common macOS permission and backup issues. Research OS
-can still back up to iCloud from this local workspace.
+can still back up to iCloud from this local workspace if you turn backup on in
+Settings. Backup controls are hidden by default for new installs.
 
 The final folder shape should be:
 

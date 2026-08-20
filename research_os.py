@@ -44,6 +44,11 @@ QUALITY_GATE_CACHE_FILE = ".quality-gates-cache.json"
 QUALITY_GATE_RULE_VERSION = "2026-08-19-ai-cleanups-v3"
 DEFAULT_RESEARCH_LENS = "neutral"
 BACKUP_STATUS_FILE = ROOT / ".backup-status.json"
+UPDATE_STATUS_FILE = ROOT / ".update-status.json"
+UPDATE_CHECK_INTERVAL = timedelta(hours=12)
+GITHUB_CHANGELOG_URL = "https://github.com/Jiptv/Research-OS/blob/main/CHANGELOG.md"
+GITHUB_REPO_URL = "https://github.com/Jiptv/Research-OS"
+GITHUB_API_REPO_URL = "https://api.github.com/repos/Jiptv/Research-OS"
 BACKUP_SCRIPT = ROOT / "scripts" / "backup-to-icloud.sh"
 BACKUP_COMMAND = WORKSPACE_ROOT / "00 Sync Research OS to iCloud.command"
 SETTINGS_FILE = ROOT / ".dashboard-settings.json"
@@ -301,6 +306,157 @@ def save_dashboard_settings(data: dict) -> dict:
     return next_settings
 
 
+def run_git(args: list[str], timeout: float = 4.0) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def git_value(args: list[str], fallback: str = "", timeout: float = 4.0) -> str:
+    try:
+        return run_git(args, timeout=timeout).strip()
+    except Exception:
+        return fallback
+
+
+def version_sort_key(tag: str) -> tuple[int, int, int, str]:
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(.*)$", tag.strip())
+    if not match:
+        return (0, 0, 0, tag)
+    major, minor, patch, suffix = match.groups()
+    return (int(major), int(minor), int(patch), suffix)
+
+
+def latest_semver_tag(tags: Iterable[str]) -> str:
+    clean = [tag for tag in tags if re.match(r"^v?\d+\.\d+\.\d+", tag)]
+    if not clean:
+        return ""
+    return sorted(clean, key=version_sort_key)[-1]
+
+
+def changelog_latest_version() -> str:
+    changelog = ROOT / "CHANGELOG.md"
+    if not changelog.exists():
+        return ""
+    match = re.search(r"^##\s+(v?\d+\.\d+\.\d+)\b", read_text(changelog), flags=re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def local_update_identity() -> dict:
+    current_sha = git_value(["rev-parse", "HEAD"])
+    changelog_version = changelog_latest_version()
+    current_version = git_value(["describe", "--tags", "--always", "--dirty"], current_sha[:7] if current_sha else changelog_version or "unknown")
+    branch = git_value(["branch", "--show-current"], "unknown")
+    return {
+        "current_sha": current_sha,
+        "current_short_sha": current_sha[:7] if current_sha else "",
+        "current_version": current_version,
+        "current_release_version": changelog_version or current_version,
+        "branch": branch,
+    }
+
+
+def load_update_cache() -> dict:
+    if not UPDATE_STATUS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(read_text(UPDATE_STATUS_FILE))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_update_cache(data: dict) -> None:
+    write_text(UPDATE_STATUS_FILE, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def update_cache_is_fresh(cache: dict) -> bool:
+    checked_at = str(cache.get("checked_at", ""))
+    if not checked_at:
+        return False
+    try:
+        checked = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return False
+    interval = UPDATE_CHECK_INTERVAL if cache.get("status") == "ok" else timedelta(hours=1)
+    return now() - checked < interval
+
+
+def github_json(path: str) -> object:
+    request = urllib.request.Request(
+        f"{GITHUB_API_REPO_URL}{path}",
+        headers={"User-Agent": "Research-OS-dashboard", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def remote_update_info() -> dict:
+    main = github_json("/commits/main")
+    remote_main_sha = str(main.get("sha", "")) if isinstance(main, dict) else ""
+    tag_payload = github_json("/tags?per_page=100")
+    tags = [str(item.get("name", "")) for item in tag_payload if isinstance(item, dict)] if isinstance(tag_payload, list) else []
+    latest_tag = latest_semver_tag(tags)
+    return {
+        "remote_main_sha": remote_main_sha,
+        "remote_short_sha": remote_main_sha[:7] if remote_main_sha else "",
+        "latest_tag": latest_tag,
+    }
+
+
+def update_status(force: bool = False) -> dict:
+    local = local_update_identity()
+    cache = load_update_cache()
+    if force or not update_cache_is_fresh(cache):
+        try:
+            remote = remote_update_info()
+            cache = {
+                "status": "ok",
+                "checked_at": now().isoformat(),
+                **remote,
+                "error": "",
+            }
+        except Exception as exc:
+            cache = {
+                **cache,
+                "status": "error",
+                "checked_at": now().isoformat(),
+                "error": str(exc),
+            }
+        save_update_cache(cache)
+    remote_sha = str(cache.get("remote_main_sha", ""))
+    latest_tag = str(cache.get("latest_tag", ""))
+    sha_update_available = bool(remote_sha and local.get("current_sha") and remote_sha != local.get("current_sha"))
+    version_update_available = bool(latest_tag and version_sort_key(latest_tag) > version_sort_key(str(local.get("current_release_version", ""))))
+    update_available = sha_update_available or version_update_available
+    latest_version = latest_tag or (remote_sha[:7] if remote_sha else "")
+    if update_available and latest_tag and remote_sha:
+        latest_version = f"{latest_tag} ({remote_sha[:7]})"
+    command_path = host_display_path(ROOT)
+    update_command = f'cd "{command_path}"\ngit pull\nscripts/run-dashboard-docker.sh'
+    return {
+        **local,
+        "status": cache.get("status", "unknown") if cache else "unknown",
+        "checked_at": cache.get("checked_at", ""),
+        "error": cache.get("error", ""),
+        "remote_main_sha": remote_sha,
+        "remote_short_sha": remote_sha[:7] if remote_sha else "",
+        "latest_tag": latest_tag,
+        "latest_version": latest_version or "unknown",
+        "update_available": update_available,
+        "check_interval_hours": round(UPDATE_CHECK_INTERVAL.total_seconds() / 3600),
+        "release_notes_url": GITHUB_CHANGELOG_URL,
+        "repo_url": GITHUB_REPO_URL,
+        "update_command": update_command,
+    }
+
+
 def dashboard_settings_payload() -> dict:
     settings = load_dashboard_settings()
     return {
@@ -314,6 +470,7 @@ def dashboard_settings_payload() -> dict:
         "projects_exists": Path(settings["projects_dir"]).exists(),
         "backup_exists": Path(settings["backup_dir"]).exists(),
         "research_lenses": available_research_lenses(),
+        "update_status": update_status(),
     }
 
 
@@ -4291,6 +4448,7 @@ def build_project_dashboard(project_dir: Path) -> dict:
 def build_dashboard_payload_uncached() -> dict:
     projects_root = projects_dir()
     projects = []
+    current_update_status = update_status()
     if projects_root.exists():
         for project_dir in sorted(path for path in projects_root.iterdir() if path.is_dir() and not path.name.startswith(".")):
             if (project_file(project_dir, "overview")).exists():
@@ -4302,6 +4460,7 @@ def build_dashboard_payload_uncached() -> dict:
         "projects": projects,
         "looped_learning": looped_learning_metrics(),
         "settings": dashboard_settings_payload(),
+        "update_status": current_update_status,
         "summary": {
             "projects": len(projects),
             "waiting_files": sum(project["project_context"]["files_waiting"] + sum(round_item["source_files"]["waiting"] for round_item in project["rounds"]) for project in projects),
@@ -6020,6 +6179,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     .backup-status.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-bg); color:var(--status-warning); }
     .backup-status.green { border-color:var(--status-success-bg); background:var(--status-success-bg); color:var(--status-success); }
     .backup-status.red { border-color:var(--status-danger-bg); background:var(--status-danger-bg); color:var(--status-danger); }
+    .version-button { height:26px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-bg); color:var(--status-warning); padding:0 10px; font:inherit; font-size:11px; font-weight:750; cursor:pointer; white-space:nowrap; }
+    .version-button[hidden] { display:none; }
+    .version-button:hover { border-color:var(--status-warning-bar); background:var(--status-warning-soft-bg); }
     .backup-button { height:26px; border:1px solid var(--border-1); border-radius:12px; background:#fff; color:var(--fg-2); padding:0 9px; font:inherit; font-size:11px; font-weight:650; cursor:pointer; white-space:nowrap; }
     .backup-button:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
     .backup-button:disabled { opacity:.55; cursor:default; }
@@ -6100,6 +6262,16 @@ DASHBOARD_HTML = r"""<!doctype html>
     .settings-card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:14px; }
     .settings-card h2 { margin:0 0 4px; font-size:14px; line-height:1.25; color:var(--fg-1); }
     .settings-card p { margin:0 0 12px; color:var(--muted); font-size:12px; line-height:1.4; }
+    .settings-card.update-card.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-soft-bg); }
+    .settings-card.update-card.green { border-color:var(--status-success-bg); }
+    .update-meta-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:10px 0 12px; }
+    .update-meta-item { border:1px solid var(--line); border-radius:10px; background:#fff; padding:9px 10px; min-width:0; }
+    .update-meta-item span { display:block; margin-bottom:4px; color:var(--fg-3); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.003em; }
+    .update-meta-item strong { display:block; color:var(--fg-1); font-size:12px; line-height:1.25; overflow-wrap:anywhere; }
+    .update-command { margin:8px 0 0; border:1px solid var(--line); border-radius:10px; background:#fff; padding:10px; color:var(--fg-1); font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .update-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+    .settings-link { height:28px; display:inline-flex; align-items:center; border:1px solid var(--border-1); border-radius:8px; background:#fff; color:var(--fg-2); padding:0 10px; font-size:12px; font-weight:650; text-decoration:none; }
+    .settings-link:hover { border-color:var(--blue-dark); color:var(--blue-dark); text-decoration:none; }
     .settings-form { display:grid; gap:12px; }
     .settings-field { display:grid; gap:5px; }
     .settings-field label { color:var(--fg-2); font-size:12px; font-weight:700; }
@@ -6136,10 +6308,15 @@ DASHBOARD_HTML = r"""<!doctype html>
     .onboarding-card ul, .onboarding-card ol { margin:0; padding-left:18px; color:var(--fg-2); font-size:12px; line-height:1.45; }
     .onboarding-card li + li { margin-top:5px; }
     .onboarding-card strong { color:var(--fg-1); }
-    .onboarding-empty { border:1px dashed var(--border-1); border-radius:12px; background:#fff; padding:18px; color:var(--fg-2); text-align:left; }
-    .onboarding-empty h2 { margin:0 0 6px; color:var(--fg-1); font-size:18px; line-height:1.25; }
-    .onboarding-empty p { margin:0 0 12px; color:var(--fg-2); font-size:13px; line-height:1.45; max-width:780px; }
-    .onboarding-empty .onboarding-grid { margin-top:12px; }
+    .onboarding-info-card { border-color:rgba(61,116,255,.2); background:linear-gradient(180deg, #fff 0%, #F7FAFF 100%); }
+    .onboarding-sidebar-demo { display:grid; grid-template-columns:52px 1fr; gap:12px; align-items:center; }
+    .demo-rail { width:46px; height:154px; border:1px solid var(--line); border-radius:14px; background:#fff; overflow:hidden; display:flex; flex-direction:column; box-shadow:var(--shadow-small-bottom); }
+    .demo-tab { height:34px; display:grid; place-items:center; border-bottom:1px solid var(--line); color:var(--fg-3); }
+    .demo-spacer { flex:1 1 auto; min-height:18px; border-bottom:1px solid var(--line); }
+    .demo-info { background:#F1F5FF; color:var(--blue); }
+    .demo-info .rail-icon { width:18px; height:18px; -webkit-mask-size:18px 18px; mask-size:18px 18px; }
+    .demo-arrow { color:var(--blue); font-size:12px; font-weight:750; line-height:1.3; display:flex; align-items:center; gap:8px; }
+    .demo-arrow::before { content:""; width:26px; height:2px; border-radius:999px; background:var(--blue); display:block; box-shadow:-6px -4px 0 -3px var(--blue), -6px 4px 0 -3px var(--blue); }
     .onboarding-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; }
     .onboarding-folder-card { border:1px solid var(--line); border-radius:10px; background:var(--surface-subtle); overflow:hidden; }
     .onboarding-folder-row { display:grid; grid-template-columns:8px 1fr auto; gap:8px; align-items:center; min-height:34px; padding:0 10px; border-bottom:1px solid var(--line); font-size:12px; color:var(--fg-2); }
@@ -6339,6 +6516,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       .learning-context-points { grid-template-columns:1fr; }
       .onboarding-grid { grid-template-columns:1fr; }
       .onboarding-hero { grid-template-columns:1fr; }
+      .update-meta-grid { grid-template-columns:1fr; }
       .row { grid-template-columns: 28px 1fr; }
       .project > .row { grid-template-columns: 28px 44px 1fr; }
       .round .row { grid-template-columns: 28px 1fr auto; }
@@ -6368,7 +6546,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar"><div class="brand"><div class="mark">R</div><span>Research OS</span></div><div class="top-status"><div class="backup-status gray" id="backupStatus" hidden>Backup: loading</div><button class="backup-button" id="backupButton" type="button" hidden>Sync to iCloud</button><div class="updated" id="updated"><span id="updatedText">Loading...</span></div></div></header>
+    <header class="topbar"><div class="brand"><div class="mark">R</div><span>Research OS</span></div><div class="top-status"><button class="version-button" id="versionButton" type="button" hidden>New version available</button><div class="backup-status gray" id="backupStatus" hidden>Backup: loading</div><button class="backup-button" id="backupButton" type="button" hidden>Sync to iCloud</button><div class="updated" id="updated"><span id="updatedText">Loading...</span></div></div></header>
     <div class="layout">
       <aside class="rail" aria-label="Research OS sections">
         <button class="rail-tab active" type="button" data-tab="dashboard" title="Dashboard" aria-label="Dashboard">
@@ -6498,6 +6676,16 @@ DASHBOARD_HTML = r"""<!doctype html>
         instruction: "Start a new Research OS project. Codex will scaffold the project folders and files, then report what was created.",
         prompt_description: "Codex creates a new Research OS project scaffold from a project name. It should ask for the name first if you have not provided one, then create the project locally using the Research OS CLI.",
         prompt: `Create a new Research OS project in Codex/Cowork.\n\nIf I have not given you the project name yet, ask me for it before changing files.\n\nUse the Research OS CLI scaffold, not APIs or backend AI generation:\ncd "Research OS"\n./research-os project create --name "[Project name]"\n\nAfter creating it, report:\n- the project path\n- the files and folders that were created\n- where I should add project background sources\n- the next prompt/action I should run from the web UI\n\nDo not call APIs.\nDo not run local stubs.\nDo not use backend processing.\nDo not create any research findings or review decisions.`
+      };
+    }
+    function workspaceSetupAction() {
+      return {
+        label: "Read workspace",
+        button_label: "Read workspace prompt",
+        copy_label: "read workspace",
+        instruction: "Copy this prompt and paste it into Codex, Claude or another AI tool that can access your local Research OS workspace before creating your first project.",
+        prompt_description: "This orients the AI tool before it starts creating or changing Research OS files. It should only inspect the workspace and report the next safe action.",
+        prompt: `Read CLAUDE.md, AGENTS.md and the Research OS instructions. Then inspect the Projects folder and tell me what projects and rounds exist, what needs review, and what the next safe Research OS action is.\n\nDo not change files yet.\nDo not call APIs.\nDo not run local stubs.\nDo not use backend processing.`
       };
     }
     function newRoundAction(project) {
@@ -6915,6 +7103,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     function onboardingBasics(mode = "tab") {
       const empty = mode === "empty";
       const action = info(newProjectAction(), "prompt");
+      const setupAction = info(workspaceSetupAction(), "prompt");
       const miniDashboard = `<div class="onboarding-mini-dashboard" aria-hidden="true">
         <div class="onboarding-mini-head"><div class="onboarding-mini-title">Example round status</div><span class="phase-status yellow">${dot("yellow")}2 to review</span></div>
         <div class="onboarding-stage"><strong>Sources</strong><div class="bar"><span class="fill green only" style="width:100%"></span></div><span class="badge green">${dot("green")}ready</span></div>
@@ -6922,12 +7111,33 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="onboarding-stage"><strong>Patterns</strong><div class="bar"><span class="fill yellow" style="width:35%"></span><span class="fill green" style="width:65%"></span></div><span class="badge yellow">${dot("yellow")}review</span></div>
         <div class="onboarding-stage"><strong>Output</strong><div class="bar"><span class="fill gray only" style="width:100%"></span></div><span class="badge gray">${dot("gray")}later</span></div>
       </div>`;
-      const intro = empty
-        ? `<section class="onboarding-empty"><h2>Start with your first research project</h2><p>Research OS turns source material into traceable research knowledge and then into deliverables. First, ask Codex or Claude to read this workspace, then create a project for the product area or topic you want to track.</p><div class="onboarding-actions">${action}</div></section>`
-        : `<section class="onboarding-hero"><div><h2>Research OS basics</h2><p>Research OS is a local workspace for turning research sources into evidence, patterns, insights, recommendations and reviewable deliverables. AI helps process and draft; you stay in control of what gets accepted.</p><span class="phase-status green">${dot("green")}Researcher-controlled knowledge pipeline</span></div>${miniDashboard}</section>`;
+      const introTitle = empty ? "Start with your first research project" : "Research OS basics";
+      const introCopy = empty
+        ? "Research OS turns source material into traceable research knowledge and then into deliverables. Start by copying the workspace prompt below into Codex or Claude, then create a project for the product area or topic you want to track."
+        : "Research OS is a local workspace for turning research sources into evidence, patterns, insights, recommendations and reviewable deliverables. AI helps process and draft; you stay in control of what gets accepted.";
+      const introStatus = empty
+        ? `<span class="phase-status yellow">${dot("yellow")}Create your first project to begin</span>`
+        : `<span class="phase-status green">${dot("green")}Researcher-controlled knowledge pipeline</span>`;
+      const introAction = empty ? `<div class="onboarding-actions">${setupAction}${action}</div>` : "";
+      const intro = `<section class="onboarding-hero"><div><h2>${introTitle}</h2><p>${introCopy}</p>${introAction}${introStatus}</div>${miniDashboard}</section>`;
+      const sidebarHint = empty ? `<section class="onboarding-card onboarding-info-card">
+            <h3>Find these basics later</h3>
+            <div class="onboarding-sidebar-demo">
+              <div class="demo-rail" aria-hidden="true">
+                <span class="demo-tab"><span class="rail-icon" style="--icon:url('/assets/icons/flask.svg')"></span></span>
+                <span class="demo-tab"><span class="rail-icon" style="--icon:url('/assets/icons/lightbulb.svg')"></span></span>
+                <span class="demo-spacer"></span>
+                <span class="demo-tab demo-info"><span class="rail-icon" style="--icon:url('/assets/icons/info.svg')"></span></span>
+                <span class="demo-tab"><span class="rail-icon" style="--icon:url('/assets/icons/settings.svg')"></span></span>
+              </div>
+              <div class="demo-arrow">Open the i page in the sidebar whenever you want this guide again.</div>
+            </div>
+            <p>The dashboard only shows the next action for active work. The i page keeps the basic explanation available without crowding your research rounds.</p>
+          </section>` : "";
       return `<div class="onboarding">
         ${intro}
         <div class="onboarding-grid">
+          ${sidebarHint}
           <section class="onboarding-card">
             <h3>How the workspace is organized</h3>
             <div class="onboarding-folder-card">
@@ -6981,9 +7191,10 @@ DASHBOARD_HTML = r"""<!doctype html>
             </ol>
           </section>
           <section class="onboarding-card">
-            <h3>Your first steps</h3>
+            <h3>What to do now</h3>
+            <div class="onboarding-actions">${setupAction}</div>
             <ol>
-              <li>Ask Codex or Claude to read the Research OS files and inspect the workspace.</li>
+              <li>Click <strong>Read workspace prompt</strong>, then paste it into Codex, Claude or another AI tool that can access your <code>UX Research</code> folder.</li>
               <li>Create your first project from the dashboard.</li>
               <li>Add project context sources if you have durable background.</li>
               <li>Create a round, add transcripts or notes, then use Run input.</li>
@@ -6993,6 +7204,37 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </div>`;
     }
+    function formatUpdateTime(value) {
+      if (!value) return "Not checked yet";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "Unknown";
+      return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+    function renderUpdateCard(update) {
+      const item = update || {};
+      const hasUpdate = Boolean(item.update_available);
+      const statusClass = hasUpdate ? "yellow" : (item.status === "ok" ? "green" : "gray");
+      const headline = hasUpdate ? "A new Research OS version is available." : (item.status === "error" ? "Could not check for updates." : "Research OS is up to date.");
+      const detail = hasUpdate
+        ? "Update from GitHub when you are ready. Your local Projects folder is separate from the Research OS code."
+        : (item.status === "error" ? escapeHtml(item.error || "The GitHub check failed. You can try again later.") : `Research OS checks GitHub about every ${escapeHtml(item.check_interval_hours || 12)} hours.`);
+      const updateHelp = hasUpdate ? `<p>Run this in Terminal to update Research OS:</p><pre class="update-command">${escapeHtml(item.update_command || "")}</pre>` : "";
+      return `<section class="settings-card update-card ${statusClass}">
+        <h2>Research OS version</h2>
+        <p>${headline} ${detail}</p>
+        <div class="update-meta-grid">
+          <div class="update-meta-item"><span>Current</span><strong>${escapeHtml(item.current_version || "unknown")}</strong></div>
+          <div class="update-meta-item"><span>GitHub</span><strong>${escapeHtml(item.latest_version || "unknown")}</strong></div>
+          <div class="update-meta-item"><span>Last checked</span><strong>${escapeHtml(formatUpdateTime(item.checked_at))}</strong></div>
+        </div>
+        ${updateHelp}
+        <div class="update-actions">
+          ${item.update_command ? `<button class="settings-save" type="button" data-copy-text="${escapeHtml(item.update_command)}" data-copy-label="update command">Copy update command</button>` : ""}
+          <button class="settings-reset" type="button" id="checkUpdatesButton">Check now</button>
+          <a class="settings-link" href="${escapeHtml(item.release_notes_url || "https://github.com/Jiptv/Research-OS/blob/main/CHANGELOG.md")}" target="_blank" rel="noreferrer">Read release notes</a>
+        </div>
+      </section>`;
+    }
     function renderSettings(settings) {
       const item = settings || {};
       const exists = value => value ? "exists" : "missing";
@@ -7001,6 +7243,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const selectedLens = item.default_research_lens || "neutral";
       const lensOptions = lenses.map(lens => `<option value="${escapeHtml(lens.key)}" ${lens.key === selectedLens ? "selected" : ""}>${escapeHtml(lens.label || lens.key)}</option>`).join("");
       return `<div class="settings-grid">
+        ${renderUpdateCard(item.update_status || {})}
         <section class="settings-card">
           <h2>Folders</h2>
           <p>Research OS works from one workspace folder on your Mac. That folder should contain Research OS/ and Projects/ next to each other.</p>
@@ -7121,6 +7364,16 @@ DASHBOARD_HTML = r"""<!doctype html>
       button.textContent = "Sync to iCloud";
       button.disabled = false;
     }
+    function renderVersionStatus(update) {
+      const button = document.getElementById("versionButton");
+      if (!button) return;
+      const hasUpdate = Boolean(update && update.update_available);
+      button.hidden = !hasUpdate;
+      if (hasUpdate) {
+        button.textContent = "New version available";
+        button.title = `Current: ${(update && update.current_version) || "unknown"} · GitHub: ${(update && update.latest_version) || "unknown"}`;
+      }
+    }
     async function refreshBackupStatus() {
       try {
         const response = await fetch("/api/backup", { cache: "no-store" });
@@ -7145,6 +7398,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.getElementById("refreshMinutes").textContent = Math.max(1, Math.round(payload.refresh_seconds / 60));
       scheduleDashboardRefresh(payload.refresh_seconds);
       setUpdatedText(`Updated ${new Date(payload.generated_at).toLocaleTimeString()}`);
+      renderVersionStatus(payload.update_status || (payload.settings && payload.settings.update_status) || {});
       document.getElementById("toolbarActions").innerHTML = info(newProjectAction(), "prompt");
       const q = document.getElementById("search").value.trim().toLowerCase();
       const projects = payload.projects.filter(project => !q || project.name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q));
@@ -7192,6 +7446,9 @@ DASHBOARD_HTML = r"""<!doctype html>
         } catch (error) {
           return false;
         }
+      }
+      async function copyText(text) {
+        return copyPromptText(text);
       }
       function positionTip(wrap) {
         const tip = wrap.querySelector(".tip");
@@ -7268,6 +7525,16 @@ DASHBOARD_HTML = r"""<!doctype html>
 	          setTimeout(() => { button.textContent = label; }, 1800);
 		        }
 		      }));
+      document.querySelectorAll("[data-copy-text]").forEach(button => button.addEventListener("click", async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const label = button.getAttribute("data-copy-label") || "text";
+        const original = button.textContent || "Copy";
+        const copied = await copyText(button.getAttribute("data-copy-text") || "");
+        button.textContent = copied ? "Copied" : "Could not copy";
+        showToast(copied ? `Copied ${label}` : `Could not copy ${label}`);
+        setTimeout(() => { button.textContent = original; }, 1300);
+      }));
 	      document.querySelectorAll("[data-waive-gates]").forEach(button => button.addEventListener("click", async event => {
 	        event.preventDefault();
 	        event.stopPropagation();
@@ -7361,6 +7628,24 @@ DASHBOARD_HTML = r"""<!doctype html>
         });
       }
       document.getElementById("reloadSettings")?.addEventListener("click", () => refresh(true));
+      document.getElementById("checkUpdatesButton")?.addEventListener("click", async event => {
+        event.preventDefault();
+        const button = event.currentTarget;
+        const label = button.textContent || "Check now";
+        button.textContent = "Checking...";
+        button.disabled = true;
+        try {
+          const response = await fetch("/api/update-check", { method: "POST" });
+          const payload = await response.json();
+          if (!response.ok || payload.error) throw new Error(payload.error || "Could not check for updates");
+          showToast(payload.update_available ? "New version available" : "Research OS is up to date");
+          setTimeout(() => refresh(true), 150);
+        } catch (error) {
+          button.textContent = "Could not check";
+          showToast(error.message || "Could not check for updates");
+          setTimeout(() => { button.textContent = label; button.disabled = false; }, 1600);
+        }
+      });
 	      document.querySelectorAll('a[href^="/file"]').forEach(link => link.addEventListener("click", event => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         if (openInlineDocument(link)) event.preventDefault();
@@ -7368,6 +7653,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       restoreInlineDocument();
     }
     document.getElementById("backupButton").addEventListener("click", startBackup);
+    document.getElementById("versionButton").addEventListener("click", () => {
+      setActiveTab("settings");
+      setTimeout(() => document.querySelector(".update-card")?.scrollIntoView({ block: "start" }), 50);
+    });
     document.querySelectorAll(".rail-tab").forEach(button => button.addEventListener("click", () => setActiveTab(button.dataset.tab)));
     document.addEventListener("click", event => {
       if (!event.target.closest(".info-wrap")) {
@@ -7670,6 +7959,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(exc)}, status=400)
                 return
             self.send_json({"status": "ok", "settings": dashboard_settings_payload()})
+            return
+        if parsed.path == "/api/update-check":
+            try:
+                payload = update_status(force=True)
+                invalidate_dashboard_cache()
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            self.send_json(payload)
             return
         if parsed.path == "/api/review-decision":
             try:

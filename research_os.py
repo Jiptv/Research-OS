@@ -6324,6 +6324,35 @@ DASHBOARD_HTML = r"""<!doctype html>
     .onboarding-folder-row strong { color:var(--fg-1); font-size:12px; }
     .onboarding-pill-list { display:flex; flex-wrap:wrap; gap:6px; }
     .onboarding-pill { min-height:24px; display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 9px; color:var(--fg-2); font-size:11px; font-weight:650; }
+    .onboarding-visual { border:1px solid var(--line); border-radius:10px; background:var(--surface-subtle); padding:10px; display:grid; gap:8px; }
+    .onboarding-flow { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; align-items:center; }
+    .flow-step { min-height:34px; border:1px solid var(--line); border-radius:9px; background:#fff; display:grid; place-items:center; text-align:center; color:var(--fg-2); font-size:11px; font-weight:750; line-height:1.2; padding:4px 6px; }
+    .flow-step.green { border-color:var(--status-success-bg); color:var(--status-success); background:var(--status-success-soft-bg); }
+    .flow-step.yellow { border-color:var(--status-warning-bg); color:var(--status-warning); background:var(--status-warning-soft-bg); }
+    .flow-step.purple { border-color:rgba(124,58,237,.25); color:var(--ai-purple); background:var(--ai-purple-bg); }
+    .flow-step.red { border-color:var(--status-danger-bg); color:var(--status-danger); background:var(--status-danger-soft-bg); }
+    .review-choices { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; }
+    .review-choice { min-height:32px; border:1px solid var(--line); border-radius:8px; background:#fff; display:flex; align-items:center; justify-content:center; gap:5px; color:var(--fg-2); font-size:11px; font-weight:750; text-align:center; }
+    .review-choice.green { border-color:var(--status-success-bg); color:var(--status-success); background:var(--status-success-soft-bg); }
+    .review-choice.yellow { border-color:var(--status-warning-bg); color:var(--status-warning); background:var(--status-warning-soft-bg); }
+    .review-choice.red { border-color:var(--status-danger-bg); color:var(--status-danger); background:var(--status-danger-soft-bg); }
+    .review-screen-demo { border:1px solid var(--line); border-radius:10px; background:#fff; overflow:hidden; box-shadow:var(--shadow-small-bottom); }
+    .review-screen-head { height:24px; border-bottom:1px solid var(--line); background:#FBFBFA; display:flex; align-items:center; justify-content:space-between; padding:0 9px; color:var(--fg-3); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.003em; }
+    .review-screen-body { padding:9px; display:grid; gap:7px; }
+    .review-proposal { border-left:3px solid var(--blue); border-radius:7px; background:#F4F7FF; padding:7px 8px; color:var(--fg-1); font-size:11px; font-weight:700; line-height:1.3; }
+    .review-note-demo { height:28px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--fg-3); font-size:10px; display:flex; align-items:center; padding:0 8px; }
+    .review-screen-actions { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:5px; }
+    .review-screen-actions .review-choice { min-height:26px; font-size:10px; border-radius:7px; padding:0 4px; }
+    .learning-loop-demo { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .learning-loop-demo .flow-step { min-height:30px; }
+    .dock-demo { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; }
+    .dock-window { border:1px solid var(--line); border-radius:10px; background:#fff; overflow:hidden; min-height:70px; }
+    .dock-window-head { height:18px; border-bottom:1px solid var(--line); background:#FBFBFA; display:flex; gap:4px; align-items:center; padding-left:8px; }
+    .dock-window-head span { width:6px; height:6px; border-radius:50%; background:var(--border-1); display:block; }
+    .dock-window-body { padding:9px; display:grid; gap:6px; }
+    .dock-menu-row { display:flex; gap:5px; align-items:center; color:var(--fg-2); font-size:11px; font-weight:750; }
+    .dock-menu-pill { border:1px solid var(--line); border-radius:999px; padding:2px 7px; background:#fff; color:var(--fg-1); }
+    .dock-icon-demo { width:44px; height:44px; border:1px solid rgba(61,116,255,.2); border-radius:12px; background:#F1F5FF; display:grid; place-items:center; color:var(--blue); font-weight:850; font-size:22px; box-shadow:var(--shadow-small-bottom); }
     .learning-intro { margin-bottom:12px; }
     .project { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; overflow: visible; background: #fff; box-shadow: var(--shadow-small-bottom); }
     .row { display:grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items:center; min-height: 58px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
@@ -7134,6 +7163,17 @@ DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <p>The dashboard only shows the next action for active work. The i page keeps the basic explanation available without crowding your research rounds.</p>
           </section>` : "";
+      const setupStep = empty
+        ? `<div class="onboarding-actions">${setupAction}</div>
+            <ol>
+              <li>Click <strong>Read workspace prompt</strong>, then paste it into Codex, Claude or another AI tool that can access your <code>UX Research</code> folder.</li>
+              <li>Create your first project from the dashboard.</li>
+              <li>Add project context sources if you have durable background.</li>
+              <li>Create a round, add transcripts or notes, then use Run input.</li>
+              <li>Review what needs your judgment, then continue synthesis stage by stage.</li>
+            </ol>`
+        : `<div class="onboarding-actions">${setupAction}</div>
+            <p>Use this prompt when you set up Research OS for the first time, or when you want Codex or Claude to re-orient itself in this workspace. After that, use the dashboard actions for projects, rounds, input, synthesis and output.</p>`;
       return `<div class="onboarding">
         ${intro}
         <div class="onboarding-grid">
@@ -7174,6 +7214,47 @@ DASHBOARD_HTML = r"""<!doctype html>
             <p>The AI moves one safe stage at a time. Evidence stays source-faithful; you review the synthesis layers before they feed deliverables.</p>
           </section>
           <section class="onboarding-card">
+            <h3>How reviews work</h3>
+            <div class="onboarding-visual">
+              <div class="review-screen-demo" aria-hidden="true">
+                <div class="review-screen-head"><span>Review item</span><span>${dot("yellow")}pending</span></div>
+                <div class="review-screen-body">
+                  <div class="review-proposal">Use this insight in the research story.</div>
+                  <div class="review-note-demo">Optional: what would you change?</div>
+                  <div class="review-screen-actions">
+                    <span class="review-choice green">${dot("green")}Yes</span>
+                    <span class="review-choice yellow">${dot("yellow")}Needs changes</span>
+                    <span class="review-choice red">${dot("red")}No</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p>Research OS keeps researcher judgment explicit. When something needs your review, read it in the web UI and choose whether it is ready, needs changes or should not be used.</p>
+            <ol>
+              <li><strong>Looks good</strong> or <strong>Yes</strong> means it can feed the next stage.</li>
+              <li><strong>Needs changes</strong> sends it back for another AI revision.</li>
+              <li><strong>No</strong> or <strong>Do not use</strong> keeps it out of the accepted research story.</li>
+              <li>You keep iterating until the active review items are accepted.</li>
+            </ol>
+          </section>
+          <section class="onboarding-card">
+            <h3>How deliverables work</h3>
+            <div class="onboarding-visual">
+              <div class="onboarding-flow">
+                <span class="flow-step green">accepted research</span>
+                <span class="flow-step yellow">review Markdown</span>
+                <span class="flow-step purple">final output</span>
+              </div>
+            </div>
+            <p>Deliverables are generated from accepted research knowledge, not straight from raw sources. Research OS first prepares a reviewable Markdown version, then you review and iterate before creating the final artifact.</p>
+            <ol>
+              <li>Evidence, Patterns, Insights and Recommendations should be accepted or have no blocking reviews.</li>
+              <li>The AI drafts or updates the Markdown deliverable for review.</li>
+              <li>You review each active section and keep iterating until every changed section looks good.</li>
+              <li>Only then create the final output, such as a PDF, copy-ready message or deck preparation prompt.</li>
+            </ol>
+          </section>
+          <section class="onboarding-card">
             <h3>How the purple AI buttons work</h3>
             <div class="onboarding-actions">${info({
               label: "Example AI prompt",
@@ -7191,15 +7272,45 @@ DASHBOARD_HTML = r"""<!doctype html>
             </ol>
           </section>
           <section class="onboarding-card">
-            <h3>What to do now</h3>
-            <div class="onboarding-actions">${setupAction}</div>
+            <h3>How Looped Learning works</h3>
+            <div class="onboarding-visual">
+              <div class="learning-loop-demo">
+                <span class="flow-step yellow">review notes</span>
+                <span class="flow-step purple">suggestion</span>
+                <span class="flow-step green">approved learning</span>
+                <span class="flow-step green">future prompts</span>
+              </div>
+            </div>
+            <p>Looped Learning turns your review feedback into Research OS-wide improvement suggestions. When you repeatedly change how evidence, synthesis or deliverables should work, the system can propose a reusable rule for future rounds and projects.</p>
             <ol>
-              <li>Click <strong>Read workspace prompt</strong>, then paste it into Codex, Claude or another AI tool that can access your <code>UX Research</code> folder.</li>
-              <li>Create your first project from the dashboard.</li>
-              <li>Add project context sources if you have durable background.</li>
-              <li>Create a round, add transcripts or notes, then use Run input.</li>
-              <li>Review what needs your judgment, then continue synthesis stage by stage.</li>
+              <li>Your review notes become feedback signals.</li>
+              <li>Research OS drafts learning suggestions from those signals.</li>
+              <li>You review those suggestions on the Looped Learning page.</li>
+              <li>Approved learnings become active instructions for later AI prompts.</li>
             </ol>
+          </section>
+          <section class="onboarding-card">
+            <h3>Add Research OS to your Dock</h3>
+            <div class="onboarding-visual dock-demo" aria-hidden="true">
+              <div class="dock-window">
+                <div class="dock-window-head"><span></span><span></span><span></span></div>
+                <div class="dock-window-body">
+                  <div class="dock-menu-row"><span class="dock-menu-pill">File</span><span>></span><span class="dock-menu-pill">Add to Dock</span></div>
+                  <div class="onboarding-stage"><strong>Research OS</strong><div class="bar"><span class="fill blue only" style="width:100%"></span></div><span>app</span></div>
+                </div>
+              </div>
+              <div class="dock-icon-demo">R</div>
+            </div>
+            <p>For a more app-like experience on macOS, open this dashboard in Safari and choose <strong>File</strong> > <strong>Add to Dock</strong>. Safari will add Research OS as a separate Dock app, so you can open it without first finding the browser tab.</p>
+            <ol>
+              <li>Open Research OS in Safari.</li>
+              <li>Use <strong>File</strong> > <strong>Add to Dock</strong>.</li>
+              <li>Name it Research OS and confirm.</li>
+            </ol>
+          </section>
+          <section class="onboarding-card">
+            <h3>What to do now</h3>
+            ${setupStep}
           </section>
         </div>
       </div>`;

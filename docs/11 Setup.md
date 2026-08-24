@@ -95,6 +95,31 @@ To stop:
 docker compose down
 ```
 
+## Start Research OS Again Later
+
+Use these steps after the first installation:
+
+1. Open Docker Desktop from `Applications`.
+2. Wait until Docker has fully started.
+3. Open Terminal and run:
+
+   ```sh
+   cd "$HOME/UX Research/Research OS"
+   scripts/run-dashboard-docker.sh
+   ```
+
+4. Open:
+
+   ```text
+   http://127.0.0.1:8765/
+   ```
+
+Alternative: in Docker Desktop, go to **Containers**, find
+`research-os-dashboard`, click the start/play button, then open
+`http://127.0.0.1:8765/`.
+
+If you are unsure, use the Terminal command. It is safe to run again.
+
 The `Projects` folder next to `Research OS` is where local project files live.
 Project data stays local by default and should not be committed to the Research
 OS repository.

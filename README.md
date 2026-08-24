@@ -315,6 +315,22 @@ The easiest setup is: install Docker Desktop, clone `Research OS` into a folder
 named `UX Research`, run `scripts/run-dashboard-docker.sh`, then open
 `http://127.0.0.1:8765/`.
 
+To start Research OS again later:
+
+1. Open Docker Desktop.
+2. Wait until Docker is fully started.
+3. Run:
+
+   ```sh
+   cd "$HOME/UX Research/Research OS"
+   scripts/run-dashboard-docker.sh
+   ```
+
+4. Open `http://127.0.0.1:8765/`.
+
+You can also start the existing `research-os-dashboard` container from Docker
+Desktop's **Containers** screen.
+
 On Mac, Safari can add the dashboard to the Dock:
 
 1. Open `http://127.0.0.1:8765/` in Safari.

@@ -230,14 +230,53 @@ docker compose down
 
 ## Start Research OS Again Later
 
-Open Terminal and paste:
+Use these steps the next time you want to use Research OS.
+
+1. Open Docker Desktop from your `Applications` folder.
+2. Wait until Docker has fully started.
+
+   Docker is ready when the Docker icon is visible in the Mac menu bar and
+   Docker Desktop is no longer showing a startup screen.
+
+3. Open Terminal and paste:
+
+   ```sh
+   cd "$HOME/UX Research/Research OS"
+   scripts/run-dashboard-docker.sh
+   ```
+
+4. Open Research OS in your browser:
+
+   ```text
+   http://127.0.0.1:8765/
+   ```
+
+If you already see a `research-os-dashboard` container in Docker Desktop, you
+can also start it there:
+
+1. Open Docker Desktop.
+2. Go to **Containers**.
+3. Find `research-os-dashboard`.
+4. Click the start/play button.
+5. Open:
+
+   ```text
+   http://127.0.0.1:8765/
+   ```
+
+If you are unsure, use the Terminal command. It is safe to run again.
+
+## Update Research OS Later
+
+Open Docker Desktop first, then open Terminal and paste:
 
 ```sh
 cd "$HOME/UX Research/Research OS"
+git pull
 scripts/run-dashboard-docker.sh
 ```
 
-Then open:
+Then open Research OS:
 
 ```text
 http://127.0.0.1:8765/

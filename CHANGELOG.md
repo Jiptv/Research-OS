@@ -8,6 +8,17 @@ Research OS uses small version numbers while it is still early:
 - `v0.2.0`, `v0.3.0`, etc. for visible new features.
 - `v1.0.0` only when Research OS is stable enough for everyday use.
 
+## v0.1.6 - Restart instructions
+
+Made it clearer how to start Research OS again after the first installation.
+
+What changed:
+
+- Added simple steps: open Docker Desktop, start Research OS, open the browser.
+- Explained that `scripts/run-dashboard-docker.sh` is safe to run again.
+- Added the Docker Desktop Containers screen as an alternative way to start the
+  existing `research-os-dashboard` container.
+
 ## v0.1.5 - Git install instructions
 
 Made the GitHub setup clearer for people who do not already have Git installed.

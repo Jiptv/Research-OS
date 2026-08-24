@@ -8,6 +8,19 @@ Research OS uses small version numbers while it is still early:
 - `v0.2.0`, `v0.3.0`, etc. for visible new features.
 - `v1.0.0` only when Research OS is stable enough for everyday use.
 
+## v0.1.7 - Dashboard signals and settings tabs
+
+Improved the dashboard with clearer round-level signals and a more organized
+settings area.
+
+What changed:
+
+- Added round signal cards for checklist progress, recent runs, review status
+  and source coverage.
+- Added richer research lens descriptions in settings.
+- Split settings into General, Backup and Lenses tabs.
+- Kept the new dashboard checks local and file-based.
+
 ## v0.1.6 - Restart instructions
 
 Made it clearer how to start Research OS again after the first installation.

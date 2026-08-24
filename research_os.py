@@ -530,6 +530,14 @@ def lens_title(text: str, fallback: str) -> str:
     return title_from_slug(fallback.replace("_", "-"))
 
 
+def lens_section(text: str, heading: str) -> str:
+    pattern = rf"^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=\n##\s+|\Z)"
+    match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group("body").strip()
+
+
 def available_research_lenses() -> list[dict]:
     lenses: list[dict] = []
     if LENSES_DIR.exists():
@@ -543,6 +551,9 @@ def available_research_lenses() -> list[dict]:
                 {
                     "key": key,
                     "label": lens_title(text, key),
+                    "purpose": lens_section(text, "Purpose"),
+                    "instructions": lens_section(text, "Additional instructions"),
+                    "optional_fields": lens_section(text, "Optional fields for Insights or Recommendations"),
                     "path": rel(path),
                     "is_default": key == DEFAULT_RESEARCH_LENS,
                 }
@@ -553,6 +564,9 @@ def available_research_lenses() -> list[dict]:
             {
                 "key": DEFAULT_RESEARCH_LENS,
                 "label": "Neutral research lens",
+                "purpose": "Use the standard Research OS interpretation model without adding a domain-specific frame.",
+                "instructions": "",
+                "optional_fields": "",
                 "path": rel(LENSES_DIR / "neutral.md"),
                 "is_default": True,
             },
@@ -2083,6 +2097,161 @@ def source_inventory(source_dir: Path) -> list[dict]:
 def latest_run(state: dict) -> dict | None:
     runs = state.get("runs", [])
     return runs[-1] if runs else None
+
+
+def recent_runs(state: dict, limit: int = 5) -> list[dict]:
+    runs = state.get("runs", [])
+    if not isinstance(runs, list):
+        return []
+    recent = []
+    for run in reversed(runs[-limit:]):
+        if not isinstance(run, dict):
+            continue
+        timestamp = run.get("created_at") or run.get("started_at") or run.get("timestamp") or ""
+        recent.append(
+            {
+                "id": run.get("id", "run"),
+                "status": run.get("status", "unknown"),
+                "created_at": timestamp,
+            }
+        )
+    return recent
+
+
+def review_analytics(review_dir: Path, deliverables_dir: Path | None = None) -> dict:
+    items = parse_markdown_review_items(review_dir)
+    decisions = load_review_decisions(review_dir)
+    counts = {"pending": 0, "approved": 0, "needs_changes": 0, "rejected": 0, "with_notes": 0}
+    by_stage: dict[str, dict[str, int]] = {}
+    for item in items:
+        stage = review_pipeline_stage(item)
+        by_stage.setdefault(stage, {"total": 0, "pending": 0, "approved": 0, "needs_changes": 0, "rejected": 0})
+        by_stage[stage]["total"] += 1
+        stored = decisions.get(item.get("id", ""))
+        stored = stored if isinstance(stored, dict) else {}
+        decision = str(stored.get("decision") or item.get("decision") or "").strip().lower()
+        notes = str(stored.get("notes") or item.get("notes") or "").strip()
+        if notes:
+            counts["with_notes"] += 1
+        if decision == "approve":
+            counts["approved"] += 1
+            by_stage[stage]["approved"] += 1
+        elif decision == "revise":
+            counts["needs_changes"] += 1
+            by_stage[stage]["needs_changes"] += 1
+        elif decision == "reject":
+            counts["rejected"] += 1
+            by_stage[stage]["rejected"] += 1
+        else:
+            counts["pending"] += 1
+            by_stage[stage]["pending"] += 1
+    if deliverables_dir and deliverables_dir.exists():
+        cache: dict[str, dict] = {}
+        for deliverable_type, _title in DELIVERABLE_REVIEW_ORDER:
+            file_path = deliverables_dir / f"{deliverable_type}.md"
+            if not file_path.exists():
+                continue
+            summary = deliverable_file_review_summary(file_path, cache)
+            review_count = int(summary.get("review") or 0)
+            stage = "deliverables"
+            by_stage.setdefault(stage, {"total": 0, "pending": 0, "approved": 0, "needs_changes": 0, "rejected": 0})
+            by_stage[stage]["total"] += 1
+            if review_count:
+                counts["pending"] += review_count
+                by_stage[stage]["pending"] += review_count
+            elif summary.get("status") == "green":
+                counts["approved"] += 1
+                by_stage[stage]["approved"] += 1
+    total = counts["pending"] + counts["approved"] + counts["needs_changes"] + counts["rejected"]
+    reviewed = max(total - counts["pending"], 0)
+    first_pass_good_rate = round((counts["approved"] / reviewed) * 100) if reviewed else 0
+    iteration_rate = round(((counts["needs_changes"] + counts["rejected"]) / reviewed) * 100) if reviewed else 0
+    return {
+        "total": total,
+        "reviewed": reviewed,
+        "pending": counts["pending"],
+        "approved": counts["approved"],
+        "needs_changes": counts["needs_changes"],
+        "rejected": counts["rejected"],
+        "with_notes": counts["with_notes"],
+        "first_pass_good_rate": first_pass_good_rate,
+        "iteration_rate": iteration_rate,
+        "by_stage": by_stage,
+    }
+
+
+def source_coverage_summary(round_dir: Path, source_items: list[dict], evidence_blocks: list[tuple[str, str]] | None = None) -> dict:
+    evidence_path = round_path(round_dir, "evidence") / "evidence.md"
+    blocks = evidence_blocks if evidence_blocks is not None else markdown_blocks_for_heading(evidence_path, r"^###\s+(EV-[A-Z]+(?:-[A-Z]+)*-\d{3})\s*$")
+    source_units = {item["top_level"]: item for item in source_items}
+    coverage_sources = [
+        item
+        for item in source_units.values()
+        if not re.search(
+            r"(round context|project context|research setup|background|overview|prior research|feedback and insights|screenshots|prototype|research walkthrough)",
+            " ".join([item.get("top_level", ""), item.get("name", "")]),
+            flags=re.IGNORECASE,
+        )
+    ]
+    source_counts = {item["top_level"]: 0 for item in coverage_sources}
+    unknown = 0
+    for _item_id, block in blocks:
+        source_text = " ".join(
+            value
+            for value in [
+                markdown_field(block, "Source"),
+                markdown_field(block, "Source reference"),
+                markdown_field(block, "Supporting Evidence"),
+            ]
+            if value
+        ).lower()
+        matched = False
+        for source in coverage_sources:
+            candidates = {source["top_level"].lower(), source["name"].lower(), Path(source["name"]).stem.lower()}
+            if any(candidate and candidate in source_text for candidate in candidates):
+                source_counts[source["top_level"]] += 1
+                matched = True
+                break
+        if not matched and source_text:
+            unknown += 1
+    sources_with_evidence = sum(1 for count in source_counts.values() if count > 0)
+    uncovered = [name for name, count in source_counts.items() if count == 0]
+    low = [name for name, count in source_counts.items() if 0 < count < 3]
+    total = len(coverage_sources)
+    status = "green"
+    if total and uncovered:
+        status = "yellow"
+    if total and sources_with_evidence == 0 and blocks:
+        status = "yellow"
+    if total and len(blocks) < total * 8:
+        status = "yellow"
+    return {
+        "status": status if total else "gray",
+        "sources_total": total,
+        "input_sources_total": len(source_units),
+        "support_sources_excluded": max(len(source_units) - total, 0),
+        "sources_with_evidence": sources_with_evidence,
+        "evidence_total": len(blocks),
+        "uncovered": uncovered[:6],
+        "uncovered_count": len(uncovered),
+        "low": low[:6],
+        "low_count": len(low),
+        "unknown_evidence": unknown,
+        "average_per_source": round(len(blocks) / total, 1) if total else 0,
+    }
+
+
+def round_first_run_checklist(round_dir: Path, source_total: int, waiting_count: int, evidence_total: int, review_count: int, deliverable_files: int, state: dict) -> list[dict]:
+    latest = latest_run(state)
+    checks = [
+        {"label": "Round context added", "done": context_present(round_dir), "hint": "Add or check the round overview and research questions."},
+        {"label": "Sources added", "done": source_total > 0, "hint": "Add transcripts, notes or other source files."},
+        {"label": "Input processed", "done": source_total > 0 and waiting_count == 0, "hint": "Use Run input after adding or changing sources."},
+        {"label": "Synthesis started", "done": evidence_total > 0 or bool(latest), "hint": "Use Run synthesis after input processing."},
+        {"label": "Reviews handled", "done": review_count == 0 and evidence_total > 0, "hint": "Review pending Evidence, Patterns, Insights or Recommendations."},
+        {"label": "Output started", "done": deliverable_files > 0, "hint": "Use Check output after synthesis is reviewed."},
+    ]
+    return checks
 
 
 def waiting_sources(source_dir: Path, state: dict, inventory: list[dict] | None = None) -> list[dict]:
@@ -4334,6 +4503,10 @@ def build_round_dashboard(round_dir: Path) -> dict:
             "review": {"pending_items": 0},
             "quality_gates": {},
             "latest_run": latest_run(state),
+            "run_history": recent_runs(state),
+            "review_analytics": review_analytics(round_path(round_dir, "reviews"), round_path(round_dir, "deliverables")),
+            "source_coverage": source_coverage_summary(round_dir, source_items),
+            "first_run_checklist": round_first_run_checklist(round_dir, source_total, 0, 0, 0, deliverable_files, state),
             "stages": {"deliverables": deliverables_stage},
             "updated_at": now().isoformat(),
         }
@@ -4343,7 +4516,8 @@ def build_round_dashboard(round_dir: Path) -> dict:
     ensure_round_recommendations_scaffold(round_dir)
     waiting = waiting_sources(source_dir, state, source_items)
     source_processed = max(source_total - len(waiting), 0)
-    evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b")
+    evidence_blocks = markdown_blocks_for_heading(round_path(round_dir, "evidence") / "evidence.md", r"^###\s+(EV-[A-Z]+(?:-[A-Z]+)*-\d{3})\s*$")
+    evidence_total = len(evidence_blocks)
     pattern_total = markdown_heading_count(round_path(round_dir, "patterns"), r"^###\s+PAT-\d{3}\b")
     insight_total = markdown_heading_count(round_path(round_dir, "insights"), r"^###\s+INS-\d{3}\b")
     recommendation_total = markdown_heading_count(round_path(round_dir, "recommendations"), r"^###\s+REC-\d{3}\b")
@@ -4390,6 +4564,10 @@ def build_round_dashboard(round_dir: Path) -> dict:
         "review": {"pending_items": review_count},
         "quality_gates": quality_gates,
         "latest_run": latest_run(state),
+        "run_history": recent_runs(state),
+        "review_analytics": review_analytics(review_dir, round_path(round_dir, "deliverables")),
+        "source_coverage": source_coverage_summary(round_dir, source_items, evidence_blocks),
+        "first_run_checklist": round_first_run_checklist(round_dir, source_total, len(waiting), evidence_total, review_count + deliverable_open_count, deliverable_files, state),
         "stages": stages,
         "updated_at": now().isoformat(),
     }
@@ -6262,6 +6440,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     .settings-card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:14px; }
     .settings-card h2 { margin:0 0 4px; font-size:14px; line-height:1.25; color:var(--fg-1); }
     .settings-card p { margin:0 0 12px; color:var(--muted); font-size:12px; line-height:1.4; }
+    .settings-tabs { display:flex; align-items:center; gap:6px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .settings-tab { height:28px; border:1px solid transparent; border-radius:999px; background:transparent; color:var(--fg-3); padding:0 11px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }
+    .settings-tab:hover { color:var(--fg-1); background:var(--bg-2); }
+    .settings-tab.active { color:var(--ai-purple-dark); border-color:rgba(124,58,237,.24); background:var(--ai-purple-bg); }
+    .settings-tab-panel { display:none; }
+    .settings-tab-panel.active { display:grid; gap:12px; }
     .settings-card.update-card.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-soft-bg); }
     .settings-card.update-card.green { border-color:var(--status-success-bg); }
     .update-meta-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:10px 0 12px; }
@@ -6290,6 +6474,21 @@ DASHBOARD_HTML = r"""<!doctype html>
     .settings-save:hover, .settings-reset:hover { border-color:var(--blue-dark); color:var(--blue-dark); }
     .settings-note-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
     .settings-note-list li { color:var(--fg-2); font-size:12px; line-height:1.4; }
+    .lens-card { border:1px solid var(--line); border-radius:12px; background:var(--bg-2); padding:12px; }
+    .lens-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .lens-card-title { color:var(--fg-1); font-size:13px; font-weight:750; }
+    .lens-card-path { color:var(--fg-3); font-size:11px; overflow-wrap:anywhere; }
+    .lens-card-purpose { color:var(--fg-2); font-size:12px; line-height:1.45; margin-bottom:8px; }
+    .lens-card-list { margin:0; padding-left:17px; color:var(--fg-2); font-size:12px; line-height:1.45; }
+    .lens-card-list li { margin:3px 0; }
+    .lens-card-extra { margin-top:10px; display:grid; gap:7px; }
+    .lens-card-extra-title { color:var(--fg-3); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+    .lens-card-extra-sub { color:var(--fg-3); font-size:11.5px; line-height:1.4; }
+    .lens-field-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
+    .lens-field-list li { border:1px solid var(--line); border-radius:8px; background:#fff; padding:8px 9px; }
+    .lens-field-list strong { display:block; color:var(--fg-1); font-size:11.5px; line-height:1.25; }
+    .lens-field-list span { display:block; margin-top:3px; color:var(--fg-3); font-size:11.5px; line-height:1.35; }
+    .lens-add-steps { margin:0; padding-left:18px; color:var(--fg-2); font-size:12px; line-height:1.5; }
     .onboarding { display:grid; gap:12px; max-width:1120px; }
     .onboarding-hero { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:18px; display:grid; grid-template-columns:1fr 280px; gap:18px; align-items:center; overflow:hidden; }
     .onboarding-hero h2 { margin:0; color:var(--fg-1); font-size:20px; line-height:1.2; }
@@ -6461,6 +6660,28 @@ DASHBOARD_HTML = r"""<!doctype html>
     .round-review-title { font-size: 12px; font-weight: 650; color:var(--fg-1); }
     .round-review-sub { margin-top: 4px; color: var(--muted); font-size: 12px; }
     .round-review-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .round-signal-grid { margin: 8px 14px 0 78px; display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:8px; }
+    .round-signal-card { min-width:0; border:1px solid var(--line); border-radius:8px; background:var(--surface-subtle); padding:7px 9px; }
+    .round-signal-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:3px; }
+    .round-signal-title { color:var(--fg-2); font-size:11px; font-weight:750; }
+    .round-signal-metric { color:var(--fg-1); font-size:11.5px; font-weight:750; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; }
+    .round-signal-sub { color:var(--fg-3); font-size:10.5px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .round-signal-list { display:grid; gap:4px; margin-top:5px; }
+    .round-signal-row { display:flex; align-items:flex-start; gap:6px; color:var(--fg-3); font-size:10.5px; line-height:1.25; }
+    .round-signal-row .dot { flex:0 0 auto; margin-top:5px; }
+    .round-signal-row.done { color:var(--fg-3); }
+    .round-signal-row.done .dot { background:var(--status-success); }
+    .round-signal-progress { height:4px; border-radius:999px; background:var(--grey-3); overflow:hidden; margin-top:5px; }
+    .round-signal-progress span { display:block; height:100%; border-radius:999px; background:var(--status-success); }
+    .round-signal-status { width:8px; height:8px; border-radius:999px; background:var(--grey-4); flex:0 0 auto; }
+    .round-signal-status.green { background:var(--status-success); }
+    .round-signal-status.yellow { background:var(--status-warning-dot); }
+    .round-signal-status.red { background:var(--status-danger); }
+    .round-signal-status.gray { background:var(--grey-4); }
+    .run-history-list { display:grid; gap:4px; margin-top:5px; }
+    .run-history-item { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--fg-2); font-size:10.5px; line-height:1.25; }
+    .run-history-item span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .run-history-item span:last-child { color:var(--fg-3); white-space:nowrap; }
     .monitor-note { margin: 10px 14px 0 78px; border:1px solid var(--line); border-radius:12px; background:var(--bg-2); padding:11px 12px; color:var(--fg-2); font-size:12px; line-height:1.4; }
     .monitor-note strong { color:var(--fg-1); }
     .readonly-deliverables { margin:10px 14px 14px 78px; border:1px solid var(--line); border-radius:12px; background:#fff; overflow:hidden; }
@@ -6556,6 +6777,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       .project-stack { grid-template-columns: 1fr; }
       .stages { padding-left: 14px; }
       .round-review-line { margin-left: 14px; grid-template-columns: 1fr; }
+      .round-signal-grid { margin-left:14px; grid-template-columns:1fr; }
       .monitor-note { margin-left:14px; }
       .readonly-deliverables { margin-left:14px; }
       .readonly-deliverable { grid-template-columns:1fr; }
@@ -6782,6 +7004,15 @@ DASHBOARD_HTML = r"""<!doctype html>
     function renderProjectPart(title, sub, actions) {
       return `<div class="project-part"><div class="project-part-main"><div class="project-part-title">${title}</div><div class="project-part-sub">${sub}</div></div><div class="project-part-actions">${actions}</div></div>`;
     }
+    function formatShortTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+    function renderNoRounds(project) {
+      return `<div class="empty"><strong>No research rounds yet.</strong><br>Create a round when you are ready to add study sources.<div style="margin-top:12px;">${info(newRoundAction(project), "prompt")}</div></div>`;
+    }
     function renderProject(project) {
       const projectId = `project:${project.id}`;
       const infoId = `project-info:${project.id}`;
@@ -6803,7 +7034,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const monitoredRoundCount = project.rounds.filter(round => round.monitored !== false).length;
       const projectMeta = project.last_round ? `${project.rounds.length} round${project.rounds.length === 1 ? "" : "s"} · ${monitoredRoundCount} monitored · last round ${project.last_round}` : "No rounds yet";
       const roundsSub = project.rounds.length ? `${project.rounds.length} round${project.rounds.length === 1 ? "" : "s"} · ${monitoredRoundCount} monitored` : "No research rounds yet";
-      return `<article class="project ${open ? "open" : ""}" data-name="${escapeHtml(project.name.toLowerCase())}"><div class="row"><button class="toggle" data-toggle="${projectId}" aria-label="Toggle project">${open ? "&#9662;" : "&#9656;"}</button><div class="project-icon" aria-hidden="true">${projectEmoji(project)}</div><div class="title"><div class="name">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(projectMeta)}</div></div><div class="badges">${attentionBadges(project.status, projectWaitingTotal(project), projectReviewTotal(project))}${info(newRoundAction(project), "prompt")}</div></div><div class="project-body"><section class="project-info-section ${infoOpen ? "open" : ""}"><div class="project-info-row"><button class="toggle" data-toggle="${infoId}" aria-label="Toggle project info">${infoOpen ? "&#9662;" : "&#9656;"}</button><div><div class="project-info-title">Project info</div><div class="project-info-sub">Sources, background and reusable context reviews</div></div><div class="badges">${sourceStatus}${project.review.pending_items ? badge("yellow", `${project.review.pending_items} to review`) : ""}</div></div><div class="project-stack">${projectParts}</div></section><div class="rounds"><div class="rounds-head"><span></span><div><div class="rounds-title">Research rounds</div><div class="rounds-sub">${escapeHtml(roundsSub)}</div></div><div class="badges">${project.rounds.length ? attentionBadges(project.status, project.rounds.reduce((sum, round) => sum + round.source_files.waiting, 0), project.rounds.reduce((sum, round) => sum + round.review.pending_items, 0)) : ""}</div></div>${project.rounds.map(renderRound).join("") || `<div class="empty">No research rounds yet.</div>`}</div></div></article>`;
+      return `<article class="project ${open ? "open" : ""}" data-name="${escapeHtml(project.name.toLowerCase())}"><div class="row"><button class="toggle" data-toggle="${projectId}" aria-label="Toggle project">${open ? "&#9662;" : "&#9656;"}</button><div class="project-icon" aria-hidden="true">${projectEmoji(project)}</div><div class="title"><div class="name">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(projectMeta)}</div></div><div class="badges">${attentionBadges(project.status, projectWaitingTotal(project), projectReviewTotal(project))}${info(newRoundAction(project), "prompt")}</div></div><div class="project-body"><section class="project-info-section ${infoOpen ? "open" : ""}"><div class="project-info-row"><button class="toggle" data-toggle="${infoId}" aria-label="Toggle project info">${infoOpen ? "&#9662;" : "&#9656;"}</button><div><div class="project-info-title">Project info</div><div class="project-info-sub">Sources, background and reusable context reviews</div></div><div class="badges">${sourceStatus}${project.review.pending_items ? badge("yellow", `${project.review.pending_items} to review`) : ""}</div></div><div class="project-stack">${projectParts}</div></section><div class="rounds"><div class="rounds-head"><span></span><div><div class="rounds-title">Research rounds</div><div class="rounds-sub">${escapeHtml(roundsSub)}</div></div><div class="badges">${project.rounds.length ? attentionBadges(project.status, project.rounds.reduce((sum, round) => sum + round.source_files.waiting, 0), project.rounds.reduce((sum, round) => sum + round.review.pending_items, 0)) : ""}</div></div>${project.rounds.map(renderRound).join("") || renderNoRounds(project)}</div></div></article>`;
     }
     function renderRound(round) {
       const roundId = `round:${round.path}`;
@@ -6816,9 +7047,41 @@ DASHBOARD_HTML = r"""<!doctype html>
       const metaParts = [`${round.source_files.total} sources`, `lens ${lens.label}`, `context ${round.project_context.present ? "present" : "missing"}`, `latest run ${round.latest_run ? round.latest_run.id : "none"}`];
       if (!monitored) metaParts.push("not monitored");
       const body = monitored
-        ? `<div class="round-body">${renderRoundReviewLine(round)}<div class="stages">${renderStageGroups(round)}</div></div>`
+        ? `<div class="round-body">${renderRoundReviewLine(round)}${renderRoundSignalCards(round)}<div class="stages">${renderStageGroups(round)}</div></div>`
         : `<div class="round-body"><div class="monitor-note"><strong>Enable monitoring to work on this round.</strong><br>You can still view existing deliverables below.</div>${renderReadonlyDeliverables(round)}</div>`;
       return `<section class="round ${open ? "open" : ""} ${monitored ? "" : "round-muted"}"><div class="row">${rowToggle}<div class="title"><div class="name">${escapeHtml(round.name)}</div><div class="meta">${escapeHtml(metaParts.join(" · "))}</div></div><div class="badges">${monitored ? `${lensBadge(round)}${attentionBadges(round.status, round.source_files.waiting, round.review.pending_items)}` : badge("gray", "not monitored")}</div>${toggle}</div>${body}</section>`;
+    }
+    function renderRoundSignalCards(round) {
+      const checklist = Array.isArray(round.first_run_checklist) ? round.first_run_checklist : [];
+      const done = checklist.filter(item => item.done).length;
+      const checklistTotal = checklist.length || 1;
+      const nextItem = checklist.find(item => !item.done);
+      const checklistCard = `<div class="round-signal-card"><div class="round-signal-head"><div class="round-signal-title">Checklist</div><div class="round-signal-metric">${done}/${checklistTotal}</div></div><div class="round-signal-sub">${escapeHtml(nextItem ? (nextItem.label || nextItem.hint || "Next step") : "Basics complete")}</div><div class="round-signal-progress"><span style="width:${Math.round((done / checklistTotal) * 100)}%"></span></div></div>`;
+
+      const history = Array.isArray(round.run_history) ? round.run_history : [];
+      const lastRun = history[0] || {};
+      const lastRunStatus = lastRun.status || (history.length ? "recorded" : "none");
+      const historyCard = `<div class="round-signal-card"><div class="round-signal-head"><div class="round-signal-title">Last run</div><div class="round-signal-metric">${escapeHtml(lastRunStatus)}</div></div><div class="round-signal-sub">${escapeHtml(history.length ? `${formatShortTime(lastRun.created_at) || "date unknown"} · ${lastRun.id || "run"}` : "No run recorded")}</div></div>`;
+
+      const analytics = round.review_analytics || {};
+      const reviewed = Number(analytics.reviewed || 0);
+      const pending = Number(analytics.pending || 0);
+      const firstPass = Number(analytics.first_pass_good_rate || 0);
+      const iterated = Number(analytics.iteration_rate || 0);
+      const analyticsSub = reviewed ? `${reviewed} reviewed · ${firstPass}% accepted · ${iterated}% iterated` : "No decisions yet";
+      const analyticsCard = `<div class="round-signal-card"><div class="round-signal-head"><div class="round-signal-title">Reviews</div><div class="round-signal-metric">${pending} pending</div></div><div class="round-signal-sub">${escapeHtml(analyticsSub)}</div></div>`;
+
+      const coverage = round.source_coverage || {};
+      const coverageStatus = coverage.status || "gray";
+      const coverageTotal = Number(coverage.sources_total || 0);
+      const coveredSources = Number(coverage.sources_with_evidence || 0);
+      const coveragePercent = coverageTotal ? Math.round((coveredSources / coverageTotal) * 100) : 0;
+      const coverageSub = coverageTotal ? `${coveredSources}/${coverageTotal} interview sources` : "No sources added yet.";
+      const uncovered = Number(coverage.uncovered_count || 0);
+      const low = Number(coverage.low_count || 0);
+      const coverageDetail = uncovered ? `${uncovered} source${uncovered === 1 ? "" : "s"} without evidence` : (low ? `${low} source${low === 1 ? "" : "s"} with thin evidence` : coverageSub);
+      const coverageCard = `<div class="round-signal-card"><div class="round-signal-head"><div class="round-signal-title">Coverage</div><div class="round-signal-metric"><span class="round-signal-status ${escapeHtml(coverageStatus)}"></span>${coverageTotal ? `${coveragePercent}% covered` : "empty"}</div></div><div class="round-signal-sub">${escapeHtml(coverageDetail)}</div></div>`;
+      return `<div class="round-signal-grid">${checklistCard}${historyCard}${analyticsCard}${coverageCard}</div>`;
     }
     function renderRoundReviewLine(round) {
       const action = round.stages.reviews && round.stages.reviews.action;
@@ -7353,47 +7616,100 @@ DASHBOARD_HTML = r"""<!doctype html>
       const lenses = item.research_lenses || [];
       const selectedLens = item.default_research_lens || "neutral";
       const lensOptions = lenses.map(lens => `<option value="${escapeHtml(lens.key)}" ${lens.key === selectedLens ? "selected" : ""}>${escapeHtml(lens.label || lens.key)}</option>`).join("");
+      const optionalFieldHelp = {
+        "Consumer context": "The user situation, task or expectation that shapes the signal.",
+        "Decision moment": "The moment where the user, team or product needs to make a choice.",
+        "Friction type": "The kind of friction involved, such as usability, comprehension, trust, habit or economic friction.",
+        "Segment affected": "The user group or situation this signal seems most relevant for.",
+        "Likely product mechanism": "The product or business mechanism this may influence, treated as a hypothesis.",
+        "UX implication": "What this means for the experience, flow, content or interaction design.",
+        "Strategic implication": "What this may mean for product direction, positioning, growth or tradeoffs.",
+        "Confidence / evidence strength": "How strong the evidence is and where the interpretation should stay cautious."
+      };
+      const lensCards = lenses.map(lens => {
+        const instructionLines = String(lens.instructions || "").split("\n").map(line => line.replace(/^\s*[-*]\s+/, "").trim()).filter(Boolean);
+        const optionalFields = String(lens.optional_fields || "").trim().replace(/^Use these fields.*?:\s*/i, "").replace(/```markdown|```/g, "").trim().split("\n").map(line => line.replace(/^\s*[-*]\s+/, "").replace(/:\s*$/, "").trim()).filter(Boolean);
+        return `<article class="lens-card">
+          <div class="lens-card-head"><div><div class="lens-card-title">${escapeHtml(lens.label || lens.key)}</div><div class="lens-card-path">${escapeHtml(lens.path || "")}</div></div>${lens.key === selectedLens ? badge("green", "default") : ""}</div>
+          <div class="lens-card-purpose">${escapeHtml(lens.purpose || "No purpose has been documented yet.")}</div>
+          ${instructionLines.length ? `<ul class="lens-card-list">${instructionLines.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}
+          ${optionalFields.length ? `<div class="lens-card-extra"><div><div class="lens-card-extra-title">Optional metadata Codex may add</div><div class="lens-card-extra-sub">These are not settings you need to fill in. They are extra fields Codex can add to Insights or Recommendations when they make the interpretation clearer.</div></div><ul class="lens-field-list">${optionalFields.map(field => `<li><strong>${escapeHtml(field)}</strong><span>${escapeHtml(optionalFieldHelp[field] || "Extra context this lens may add when it helps the synthesis stand on its own.")}</span></li>`).join("")}</ul></div>` : ""}
+        </article>`;
+      }).join("");
       return `<div class="settings-grid">
-        ${renderUpdateCard(item.update_status || {})}
-        <section class="settings-card">
-          <h2>Folders</h2>
-          <p>Research OS works from one workspace folder on your Mac. That folder should contain Research OS/ and Projects/ next to each other.</p>
-          <form class="settings-form" id="settingsForm">
-            <div class="settings-field">
-              <label>Research OS folder</label>
-              <div class="settings-path-display">${escapeHtml(item.research_os_display_dir || item.research_os_dir || "")}</div>
-              <div class="settings-meta">Mac folder, ${exists(item.research_os_exists)}. This is where the dashboard and Research OS code live on your computer.</div>
-            </div>
-            <div class="settings-field">
-              <label for="projectsDir">Projects folder</label>
-              <input id="projectsDir" name="projects_dir" type="text" value="${escapeHtml(item.projects_display_dir || item.projects_dir || "")}" autocomplete="off" spellcheck="false">
-              <div class="settings-meta">Mac folder for research projects. Keep this next to the Research OS folder, for example in your UX Research workspace.</div>
-            </div>
-            <label class="settings-toggle" for="backupEnabled">
-              <input id="backupEnabled" name="backup_enabled" type="checkbox" ${item.backup_enabled ? "checked" : ""}>
-              <span><strong>Show iCloud backup controls</strong><span>Off by default. Turn this on if you want Research OS to show backup status and the Sync to iCloud button on the dashboard.</span></span>
-            </label>
-            <div class="settings-field">
-              <label for="backupDir">Backup destination</label>
-              <input id="backupDir" name="backup_dir" type="text" value="${escapeHtml(item.backup_dir || "")}" autocomplete="off" spellcheck="false">
-              <div class="settings-meta">Used only when iCloud backup controls are enabled. The backup button syncs both Research OS and Projects into this backup folder.</div>
-            </div>
-            <div class="settings-field">
-              <label for="refreshMinutesInput">Dashboard refresh interval</label>
-              <input id="refreshMinutesInput" name="refresh_minutes" type="number" min="1" max="60" step="1" value="${escapeHtml(refreshMinutes)}">
-              <div class="settings-meta">Auto-refresh frequency in minutes. Saved range: 1-60 minutes.</div>
-            </div>
-            <div class="settings-field">
-              <label for="defaultResearchLens">Default research lens for new rounds</label>
-              <select id="defaultResearchLens" name="default_research_lens">${lensOptions}</select>
-              <div class="settings-meta">Used only when creating new rounds. Existing rounds keep their selected lens.</div>
-            </div>
-            <div class="settings-actions">
-              <button class="settings-save" type="submit">Save settings</button>
-              <button class="settings-reset" type="button" id="reloadSettings">Reload</button>
-              <span class="settings-meta" id="settingsStatus">Settings file: ${escapeHtml(item.settings_display_file || item.settings_file || "")}</span>
-            </div>
-          </form>
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button class="settings-tab active" type="button" data-settings-tab="general">General</button>
+          <button class="settings-tab" type="button" data-settings-tab="backup">Backup</button>
+          <button class="settings-tab" type="button" data-settings-tab="lenses">Lenses</button>
+        </div>
+        <section class="settings-tab-panel active" data-settings-panel="general">
+          ${renderUpdateCard(item.update_status || {})}
+          <section class="settings-card">
+            <h2>Folders</h2>
+            <p>Research OS works from one workspace folder on your Mac. That folder should contain Research OS/ and Projects/ next to each other.</p>
+            <form class="settings-form" id="settingsForm">
+              <div class="settings-field">
+                <label>Research OS folder</label>
+                <div class="settings-path-display">${escapeHtml(item.research_os_display_dir || item.research_os_dir || "")}</div>
+                <div class="settings-meta">Mac folder, ${exists(item.research_os_exists)}. This is where the dashboard and Research OS code live on your computer.</div>
+              </div>
+              <div class="settings-field">
+                <label for="projectsDir">Projects folder</label>
+                <input id="projectsDir" name="projects_dir" type="text" value="${escapeHtml(item.projects_display_dir || item.projects_dir || "")}" autocomplete="off" spellcheck="false">
+                <div class="settings-meta">Mac folder for research projects. Keep this next to the Research OS folder, for example in your UX Research workspace.</div>
+              </div>
+              <div class="settings-field">
+                <label for="defaultResearchLens">Default research lens for new rounds</label>
+                <select id="defaultResearchLens" name="default_research_lens">${lensOptions}</select>
+                <div class="settings-meta">Used only when creating new rounds. Existing rounds keep their selected lens.</div>
+              </div>
+              <div class="settings-actions">
+                <button class="settings-save" type="submit">Save settings</button>
+                <button class="settings-reset" type="button" id="reloadSettings">Reload</button>
+                <span class="settings-meta" id="settingsStatus">Settings file: ${escapeHtml(item.settings_display_file || item.settings_file || "")}</span>
+              </div>
+            </form>
+          </section>
+        </section>
+        <section class="settings-tab-panel" data-settings-panel="backup">
+          <section class="settings-card">
+            <h2>Backup</h2>
+            <p>Backup is optional. When enabled, Research OS shows backup status and a Sync to iCloud button in the dashboard header.</p>
+            <form class="settings-form" id="backupSettingsForm">
+              <label class="settings-toggle" for="backupEnabled">
+                <input id="backupEnabled" name="backup_enabled" type="checkbox" ${item.backup_enabled ? "checked" : ""}>
+                <span><strong>Show iCloud backup controls</strong><span>Off by default. Turn this on if you want Research OS to show backup status and the Sync to iCloud button on the dashboard.</span></span>
+              </label>
+              <div class="settings-field">
+                <label for="backupDir">Backup destination</label>
+                <input id="backupDir" name="backup_dir" type="text" value="${escapeHtml(item.backup_dir || "")}" autocomplete="off" spellcheck="false">
+                <div class="settings-meta">Used only when iCloud backup controls are enabled. The backup button syncs both Research OS and Projects into this backup folder.</div>
+              </div>
+              <div class="settings-field">
+                <label for="refreshMinutesInput">Dashboard refresh interval</label>
+                <input id="refreshMinutesInput" name="refresh_minutes" type="number" min="1" max="60" step="1" value="${escapeHtml(refreshMinutes)}">
+                <div class="settings-meta">Auto-refresh frequency in minutes. Saved range: 1-60 minutes.</div>
+              </div>
+              <div class="settings-actions">
+                <button class="settings-save" type="submit">Save settings</button>
+                <button class="settings-reset" type="button" id="reloadSettingsBackup">Reload</button>
+                <span class="settings-meta" id="backupSettingsStatus">Settings file: ${escapeHtml(item.settings_display_file || item.settings_file || "")}</span>
+              </div>
+            </form>
+          </section>
+        </section>
+        <section class="settings-tab-panel" data-settings-panel="lenses">
+          <section class="settings-card">
+            <h2>Research lenses</h2>
+            <p>Lenses add a reusable interpretation frame on top of the normal Research OS rules. Evidence stays source-faithful; lenses mainly guide Patterns, Insights, Recommendations and Deliverables.</p>
+            <ol class="lens-add-steps">
+              <li>Add a new Markdown file in <code>Research OS/lenses/</code>, for example <code>service-design.md</code>.</li>
+              <li>Start with a title, then add <code>## Purpose</code> and <code>## Additional instructions</code>.</li>
+              <li>Keep instructions general enough to reuse across research rounds.</li>
+              <li>Refresh the dashboard. The lens will appear in the default lens dropdown and on each round.</li>
+            </ol>
+          </section>
+          ${lensCards || `<div class="empty">No research lenses found.</div>`}
         </section>
       </div>`;
     }
@@ -7710,35 +8026,55 @@ DASHBOARD_HTML = r"""<!doctype html>
           alert(error.message || "Could not update monitoring");
         }
       }));
+      document.querySelectorAll("[data-settings-tab]").forEach(button => button.addEventListener("click", event => {
+        event.preventDefault();
+        const tab = button.getAttribute("data-settings-tab") || "general";
+        localStorage.setItem("research-os-settings-tab", tab);
+        document.querySelectorAll("[data-settings-tab]").forEach(item => item.classList.toggle("active", item.getAttribute("data-settings-tab") === tab));
+        document.querySelectorAll("[data-settings-panel]").forEach(panel => panel.classList.toggle("active", panel.getAttribute("data-settings-panel") === tab));
+      }));
+      const savedSettingsTab = localStorage.getItem("research-os-settings-tab") || "general";
+      document.querySelector(`[data-settings-tab="${savedSettingsTab}"]`)?.click();
+      const saveSettings = async statusId => {
+        const status = document.getElementById(statusId);
+        const payload = {
+          projects_dir: document.getElementById("projectsDir")?.value.trim() || "",
+          backup_dir: document.getElementById("backupDir")?.value.trim() || "",
+          backup_enabled: Boolean(document.getElementById("backupEnabled")?.checked),
+          refresh_seconds: Math.max(1, Number(document.getElementById("refreshMinutesInput")?.value || 15)) * 60,
+          default_research_lens: document.getElementById("defaultResearchLens")?.value || "neutral"
+        };
+        if (status) status.textContent = "Saving...";
+        try {
+          const response = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const body = await response.json();
+          if (!response.ok || body.error) throw new Error(body.error || "Could not save settings");
+          showToast("Settings saved");
+          setTimeout(() => refresh(true), 200);
+        } catch (error) {
+          if (status) status.textContent = error.message || "Could not save settings";
+        }
+      };
       const settingsForm = document.getElementById("settingsForm");
       if (settingsForm) {
         settingsForm.addEventListener("submit", async event => {
           event.preventDefault();
-          const status = document.getElementById("settingsStatus");
-          const payload = {
-            projects_dir: document.getElementById("projectsDir").value.trim(),
-            backup_dir: document.getElementById("backupDir").value.trim(),
-            backup_enabled: document.getElementById("backupEnabled").checked,
-            refresh_seconds: Math.max(1, Number(document.getElementById("refreshMinutesInput").value || 15)) * 60,
-            default_research_lens: document.getElementById("defaultResearchLens").value
-          };
-          if (status) status.textContent = "Saving...";
-          try {
-            const response = await fetch("/api/settings", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
-            const body = await response.json();
-            if (!response.ok || body.error) throw new Error(body.error || "Could not save settings");
-            showToast("Settings saved");
-            setTimeout(() => refresh(true), 200);
-          } catch (error) {
-            if (status) status.textContent = error.message || "Could not save settings";
-          }
+          await saveSettings("settingsStatus");
+        });
+      }
+      const backupSettingsForm = document.getElementById("backupSettingsForm");
+      if (backupSettingsForm) {
+        backupSettingsForm.addEventListener("submit", async event => {
+          event.preventDefault();
+          await saveSettings("backupSettingsStatus");
         });
       }
       document.getElementById("reloadSettings")?.addEventListener("click", () => refresh(true));
+      document.getElementById("reloadSettingsBackup")?.addEventListener("click", () => refresh(true));
       document.getElementById("checkUpdatesButton")?.addEventListener("click", async event => {
         event.preventDefault();
         const button = event.currentTarget;

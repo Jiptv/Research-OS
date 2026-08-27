@@ -2951,9 +2951,22 @@ def artifact_ids_from_text(text: str, prefix: str, fallback_path: Path | None = 
 
 def round_dir_for_review_path(path: Path) -> Path | None:
     target = path if path.is_file() else path / "review-queue.md"
-    if target.name != "review-queue.md" or len(target.parents) < 2:
+    if target.name != "review-queue.md":
         return None
-    return target.parents[1]
+    for parent in target.parents:
+        if round_file(parent, "overview").exists():
+            return parent
+    return None
+
+
+def project_dir_for_review_path(path: Path) -> Path | None:
+    target = path if path.is_file() else path / "project-context-proposals.md"
+    if target.name != "project-context-proposals.md":
+        return None
+    for parent in target.parents:
+        if project_file(parent, "overview").exists():
+            return parent
+    return None
 
 
 def expanded_review_items(path: Path) -> list[dict]:
@@ -5281,7 +5294,7 @@ def deliverable_dashboard_items(deliverables_dir: Path) -> list[dict]:
             if file_path.exists() and status == "green" and export_action:
                 actions = [
                     {
-                        "label": "Copy all notes",
+                        "label": "Copy",
                         "copy_path": rel(file_path),
                         "copy_mode": "post-it-notes",
                     }
@@ -5300,7 +5313,7 @@ def deliverable_dashboard_items(deliverables_dir: Path) -> list[dict]:
             if file_path.exists():
                 actions.append(
                     {
-                        "label": "Copy summary" if deliverable_type == "research-summary" else "Copy brief",
+                        "label": "Copy",
                         "copy_path": rel(file_path),
                         "copy_mode": "raw",
                     }
@@ -5493,6 +5506,8 @@ After updating, report exactly which sections changed and confirm the deliverabl
       .decision-row button:hover { border-color:var(--blue-dark); }
       .deliverable-saved { display:inline-flex; align-items:center; gap:7px; color:var(--fg-2); font-size:12px; }
       .deliverable-saved em { font-style:normal; color:var(--fg-3); }
+      .toast { position: fixed; left: 50%; bottom: 18px; z-index: 1200; max-width: min(420px, calc(100vw - 36px)); border:1px solid var(--line); border-radius:12px; background:#222; color:#fff; box-shadow:0 14px 34px rgba(32,43,64,.18); padding:10px 12px; font-size:12px; font-weight:400; opacity:0; transform:translate(-50%, 8px); pointer-events:none; transition:opacity .16s ease, transform .16s ease; }
+      .toast.show { opacity:1; transform:translate(-50%, 0); }
       .raw { margin-top:18px; }
     """
     return f"""<!doctype html><html><head><title>{title}</title><style>{deliverable_style}</style></head><body><main>
@@ -5504,9 +5519,18 @@ After updating, report exactly which sections changed and confirm the deliverabl
       </header>
       <section class="deliverable-grid">{"".join(review_cards)}</section>
       <details class="raw"><summary>Raw Markdown</summary><pre>{html.escape(text)}</pre></details>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <script>
         const path = "{path_attr}";
         const decisionLabels = {{ "Looks good": "Looks good", "Needs changes": "Needs changes", "Do not use": "Do not use" }};
+        function showToast(message) {{
+          const toast = document.getElementById("toast");
+          if (!toast) return;
+          toast.textContent = message;
+          toast.classList.add("show");
+          clearTimeout(toast._timer);
+          toast._timer = setTimeout(() => toast.classList.remove("show"), 2200);
+        }}
         document.querySelectorAll("[data-deliverable-decision]").forEach(button => button.addEventListener("click", async () => {{
           const id = button.dataset.id;
           const status = button.dataset.deliverableDecision || "";
@@ -5534,6 +5558,7 @@ After updating, report exactly which sections changed and confirm the deliverabl
           const original = button.textContent;
           await navigator.clipboard.writeText(button.dataset.prompt || "");
           button.textContent = "Copied";
+          showToast("Copied revise prompt");
           setTimeout(() => button.textContent = original, 1200);
         }}));
       </script>
@@ -5887,6 +5912,90 @@ def review_decided_controls(item: dict, labels: dict[str, str]) -> str:
     </div>"""
 
 
+def synthesis_after_reviews_prompt(round_dir: Path) -> str:
+    source_total = len(source_inventory(round_path(round_dir, "sources")))
+    evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b")
+    gates = round_quality_gates(round_dir, source_total=source_total, evidence_total=evidence_total)
+    gate_lines = []
+    for stage_name, issues in gates.items():
+        for issue in issues[:4]:
+            gate_lines.append(f"- {title_from_slug(stage_name)} {issue.get('id', 'Gate')}: {issue.get('message', '')}")
+    gate_text = "\n".join(gate_lines) or "- No visible quality gates in the dashboard payload."
+    return f"""Continue synthesis after my reviews for this Research OS round in Codex/Cowork: {rel(round_dir)}.
+
+First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.
+Read 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules.
+{research_lens_prompt_block(round_dir)}
+
+Read the completed review decisions for Evidence, Patterns, Insights and Recommendations.
+Apply completed review decisions to the Research OS documents.
+Continue the next appropriate synthesis step based on which reviews are complete:
+- after Evidence reviews: update Patterns
+- after Pattern reviews: update Insights
+- after Insight reviews: update Recommendations
+- after Recommendation reviews: prepare downstream output/current understanding or report what still blocks it
+
+Also improve quality gaps where the source material supports it: traceability, weak support, contradicting evidence, assumptions/open questions, unclear "Helps us understand" fields, and over-compressed Evidence, Patterns, Insights or Recommendations that do not stand alone.
+
+Do not call APIs.
+Do not run local stubs.
+Do not use the backend pipeline.
+Do not make review decisions for me.
+Keep unresolved items pending in the web UI.
+
+Current visible checks needing attention:
+{gate_text}
+
+Report what changed, what was not changed, and what still needs review."""
+
+
+def review_complete_next_step_html(target: Path, stage: str = "") -> str:
+    if is_looped_learning_path(target):
+        prompt = looped_learning_prompt()
+        prompt_name = "Process looped learning"
+        description = "Your learning reviews are clear. Run this prompt so Codex can apply approved Research OS-wide learnings and keep future analysis instructions up to date."
+        label = "Copy prompt"
+    else:
+        round_dir = round_dir_for_review_path(target)
+        project_dir = project_dir_for_review_path(target)
+        if round_dir:
+            prompt = synthesis_after_reviews_prompt(round_dir)
+            prompt_name = "Run synthesis"
+            stage_label = dict(REVIEW_PIPELINE_STAGES).get(stage, "this review queue") if stage else "this review queue"
+            stage_next = {
+                "evidence": "Codex will apply your Evidence decisions and update Patterns.",
+                "patterns": "Codex will apply your Pattern decisions and update Insights.",
+                "insights": "Codex will apply your Insight decisions and update Recommendations.",
+                "recommendations": "Codex will apply your Recommendation decisions and prepare the round for Output.",
+            }.get(stage, "Codex will apply your completed decisions and continue the next safe synthesis step.")
+            description = f"You handled {stage_label.lower()}. {stage_next} New or changed items stay reviewable in the web UI."
+            label = "Copy prompt"
+        elif project_dir:
+            prompt_name = "Process context"
+            prompt = f"""Apply completed project context review decisions for this Research OS project in Codex/Cowork: {rel(project_dir)}.
+
+First read {rel(LOOPED_ACTIVE_FILE)} and apply any active Looped Learnings.
+Read the project context proposal queue and apply completed review decisions to the Research OS project documents.
+Keep unresolved or changed proposals pending in the web UI.
+
+Do not call APIs.
+Do not run local stubs.
+Do not use backend processing.
+Do not make review decisions for me.
+
+Report what changed, what was not changed, and what still needs review."""
+            description = "You handled project context reviews. Run this prompt so Codex can apply accepted context, revise what needs changes, and keep unresolved items reviewable."
+            label = "Copy prompt"
+        else:
+            return '<div class="done-next"><h3>Next step</h3><p>Return to the dashboard to see the next safe Research OS action.</p><a class="done-link" href="/dashboard">Back to dashboard</a></div>'
+    return f"""<div class="done-next">
+      <h3>Run this prompt: {html.escape(prompt_name)}</h3>
+      <p>{html.escape(description)}</p>
+      <button type="button" data-copy-next-prompt="{html.escape(prompt, quote=True)}" data-copy-label="{html.escape(prompt_name, quote=True)}">{html.escape(label)}</button>
+      <a class="done-link" href="/dashboard">Back to dashboard</a>
+    </div>"""
+
+
 def dashboard_review_focus_page(target: Path, title: str, text: str, base_style: str, stage: str = "") -> str:
     stage = stage.strip().lower()
     valid_stages = {key for key, _label in REVIEW_PIPELINE_STAGES}
@@ -5916,6 +6025,7 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
     stage_label = dict(REVIEW_PIPELINE_STAGES).get(stage, "")
     display_title = f"{title} - {stage_label}" if stage_label else title
     round_dir = round_dir_for_review_path(target)
+    next_step_html = review_complete_next_step_html(target, stage)
     lens = selected_research_lens(round_dir) if round_dir else None
     lens_notice = ""
     if lens:
@@ -6045,6 +6155,14 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
       .edit-review { margin-top: 8px; min-height: 28px; border: 1px solid var(--border-muted); border-radius: 5px; background: #fff; color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; padding: 0 10px; }
       .done { display:none; max-width: 720px; margin: 80px auto; text-align:center; color:var(--fg-2); }
       .done.active { display:block; }
+      .done-next { margin:24px auto 0; max-width:560px; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 8px 22px rgba(31,43,70,.06); padding:14px; text-align:left; }
+      .done-next h3 { margin:0 0 5px; color:var(--fg-1); font-size:14px; line-height:1.25; }
+      .done-next p { margin:0 0 12px; color:var(--fg-2); font-size:13px; line-height:1.45; }
+      .done-next button, .done-link { min-height:30px; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(124,58,237,.35); border-radius:999px; background:#fff; color:var(--ai-purple); padding:0 11px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; text-decoration:none; }
+      .done-next button:hover, .done-link:hover { border-color:var(--ai-purple); background:var(--ai-purple-bg); color:var(--ai-purple-dark); text-decoration:none; }
+      .done-link { margin-left:6px; border-color:var(--border-muted); color:var(--fg-2); }
+      .toast { position: fixed; left: 50%; bottom: 18px; z-index: 1200; max-width: min(420px, calc(100vw - 36px)); border:1px solid var(--line); border-radius:12px; background:#222; color:#fff; box-shadow:0 14px 34px rgba(32,43,64,.18); padding:10px 12px; font-size:12px; font-weight:400; opacity:0; transform:translate(-50%, 8px); pointer-events:none; transition:opacity .16s ease, transform .16s ease; }
+      .toast.show { opacity:1; transform:translate(-50%, 0); }
       .doc-reference { display: grid; gap: 2px; color: inherit; text-decoration: none; }
       .doc-reference strong { color: var(--fg-2); font-size: 13px; }
       .doc-reference span { color: var(--fg-3); font-size: 11px; overflow-wrap: anywhere; }
@@ -6067,13 +6185,22 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
         <div class="focus-nav"><span class="focus-count" id="focusCount"></span><button type="button" id="prevBtn">← Previous</button><button type="button" id="nextBtn">Next →</button></div>
       </header>
       {lens_notice}
-      <section class="focus-wrap">{body}<div class="done" id="doneState"><h2>All reviews handled</h2><p>No open review items remain in this queue.</p></div></section>
+      <section class="focus-wrap">{body}<div class="done" id="doneState"><h2>All reviews handled</h2><p>No open review items remain in this queue.</p>{next_step_html}</div></section>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <script>
         const reviewPath = {path_js};
         const cards = Array.from(document.querySelectorAll(".focus-card"));
         const decisionLabels = {{ Approve: "Yes, use this", Revise: "Needs changes", Reject: "No, don't use" }};
         let current = cards.findIndex(card => card.dataset.pending === "true");
         if (current < 0) current = cards.length ? 0 : -1;
+        function showToast(message) {{
+          const toast = document.getElementById("toast");
+          if (!toast) return;
+          toast.textContent = message;
+          toast.classList.add("show");
+          clearTimeout(toast._timer);
+          toast._timer = setTimeout(() => toast.classList.remove("show"), 2200);
+        }}
         function firstPendingFrom(start) {{
           for (let index = start; index < cards.length; index += 1) {{
             if (cards[index].dataset.pending === "true") return index;
@@ -6137,6 +6264,15 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
             const template = document.querySelector(`[data-edit-template="${{CSS.escape(id)}}"]`);
             const controls = document.querySelector(`[data-control-for="${{CSS.escape(id)}}"]`);
             if (template && controls) controls.innerHTML = template.innerHTML;
+            return;
+          }}
+          const promptButton = event.target.closest("[data-copy-next-prompt]");
+          if (promptButton) {{
+            navigator.clipboard.writeText(promptButton.dataset.copyNextPrompt || "");
+            showToast(`Copied ${{promptButton.dataset.copyLabel || "next"}} prompt`);
+            const label = promptButton.textContent;
+            promptButton.textContent = "Copied";
+            setTimeout(() => {{ promptButton.textContent = label; }}, 1400);
           }}
         }});
         show(current);
@@ -6633,27 +6769,28 @@ DASHBOARD_HTML = r"""<!doctype html>
     .stage-cta { max-width:100%; height: 26px; display: inline-flex; align-items: center; border: 1px solid var(--border-1); border-radius: 8px; background: #fff; color: var(--fg-2); padding: 0 9px; font-size: 12px; font-weight: 650; text-decoration: none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .stage-cta.review { border-color: var(--status-warning-bg); background: var(--status-warning-bg); color: var(--status-warning); }
     .stage-cta:hover { border-color: var(--blue-dark); color: var(--blue-dark); text-decoration: none; }
-    .stage.deliverables-stage { display:block; padding: 10px 12px 12px; min-height: 0; }
-    .deliverables-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+    .stage.deliverables-stage { display:block; padding: 8px 10px 10px; min-height: 0; }
+    .deliverables-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
     .deliverables-title { display:flex; align-items:center; gap:6px; color:var(--fg-2); font-size:12px; font-weight:650; }
     .deliverables-meta { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
-    .deliverable-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
-    .deliverable-doc { min-width:0; display:grid; grid-template-rows:1fr auto; gap:8px; min-height:116px; padding:10px; border:1px solid var(--border-1); border-radius:8px; background:var(--bg-2); }
-    .deliverable-link { min-width:0; display:grid; grid-template-rows:32px 20px 1fr; gap:7px; align-content:start; min-height:0; color:inherit; text-decoration:none; }
+    .deliverable-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
+    .deliverable-doc { min-width:0; display:grid; grid-template-rows:1fr auto; gap:6px; min-height:94px; padding:8px; border:1px solid var(--border-1); border-radius:8px; background:var(--bg-2); }
+    .deliverable-link { min-width:0; display:grid; grid-template-rows:30px 18px 1fr; gap:5px; align-content:start; min-height:0; color:inherit; text-decoration:none; }
     .deliverable-link:hover { border-color:var(--blue-dark); text-decoration:none; }
     .deliverable-link.missing { color:var(--fg-3); }
     .deliverable-link.missing strong { color:var(--fg-3); }
     .deliverable-link strong { min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-size:12px; color:var(--fg-1); line-height:1.3; }
-    .deliverable-link .deliverable-desc { color:var(--fg-3); font-size:11px; line-height:1.35; }
-    .deliverable-link .doc-status { width:max-content; max-width:100%; height:20px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 8px; color:var(--fg-2); font-size:10.5px; font-weight:650; white-space:nowrap; }
+    .deliverable-link .deliverable-desc { color:var(--fg-3); font-size:11px; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+    .deliverable-link .doc-status { width:max-content; max-width:100%; height:18px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 7px; color:var(--fg-2); font-size:10.5px; font-weight:650; white-space:nowrap; }
     .deliverable-link .doc-status.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-bg); color:var(--status-warning); }
     .deliverable-link .doc-status.green { border-color:var(--status-success-bg); background:var(--status-success-bg); color:var(--status-success); }
     .deliverable-link .doc-status.gray { color:var(--fg-3); }
-    .deliverable-actions { min-width:0; display:flex; justify-content:flex-start; align-items:center; gap:6px; flex-wrap:wrap; overflow:hidden; }
+    .deliverable-actions { min-width:0; display:flex; justify-content:flex-start; align-items:center; gap:5px; flex-wrap:wrap; overflow:hidden; }
     .deliverable-actions .prompt-wrap { max-width:100%; min-width:0; }
-    .deliverable-actions .prompt-wrap .info.has-label { max-width:100%; }
+    .deliverable-actions .prompt-wrap .info.has-label { max-width:100%; height:22px; padding:0 8px; gap:5px; }
+    .deliverable-actions .prompt-wrap .sparkle { width:13px; height:13px; }
     .deliverable-actions .prompt-button-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .deliverable-action { max-width:100%; height:24px; display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border-muted); border-radius:999px; background:#fff; color:var(--fg-2); padding:0 9px; font:inherit; font-size:11px; font-weight:650; text-decoration:none; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .deliverable-action { max-width:100%; height:22px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--border-muted); border-radius:999px; background:#fff; color:var(--fg-2); padding:0 8px; font:inherit; font-size:11px; font-weight:650; text-decoration:none; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .deliverable-action:hover { border-color:var(--blue-dark); text-decoration:none; }
     .round-review-line { margin: 10px 14px 0 78px; border: 1px solid var(--status-warning-bg); border-radius: 12px; background: var(--status-warning-soft-bg); display:grid; grid-template-columns: 1fr auto 28px; gap: 12px; align-items:center; padding: 11px 12px; }
     .round-review-line.clear { border-color: var(--border-1); background:#fff; }

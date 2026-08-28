@@ -36,8 +36,7 @@ Turn Patterns, Evidence and Method Assessments into proposed Insights that can b
 Use Markdown with structured fields:
 
 ```markdown
-## Insight Proposal
-- Insight ID:
+### INS-001
 - Status: Proposed
 - Statement:
 - Applies to:
@@ -49,6 +48,12 @@ Use Markdown with structured fields:
 - Assumptions:
 - Open Questions:
 ```
+
+Use the Insight ID directly as the `###` heading. Do not use a generic
+`## Insight Proposal` heading with the ID only as a field, because dashboard
+review and quality checks use the heading ID as the artifact anchor. The main
+insight text may be stored as `Statement:`; the dashboard also accepts `Insight:`
+for older files.
 
 `Helps us understand` must be one plain-language sentence that answers the UI prompt
 "What this helps us understand". It should describe the meaning or implication of the

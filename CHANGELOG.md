@@ -8,6 +8,18 @@ Research OS uses small version numbers while it is still early:
 - `v0.2.0`, `v0.3.0`, etc. for visible new features.
 - `v1.0.0` only when Research OS is stable enough for everyday use.
 
+## v0.1.9 - Synthesis and public wording cleanup
+
+Improved synthesis guidance and removed a company-specific PDF layout reference
+from public instructions.
+
+What changed:
+
+- Refined Pattern, Insight and Knowledge Curator agent guidance.
+- Updated architecture and knowledge-pipeline notes for safer synthesis flow.
+- Improved dashboard support for the updated review/synthesis workflow.
+- Replaced a company-specific PDF layout reference with generic public wording.
+
 ## v0.1.8 - Review and PDF export polish
 
 Improved review clarity and PDF export handling.

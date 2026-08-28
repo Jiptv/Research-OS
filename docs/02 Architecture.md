@@ -1607,6 +1607,12 @@ Each review item should include:
 * reason human review is required
 * available actions
 
+The proposed change must be the concrete knowledge item the researcher is judging,
+not an instruction to review it. For example, show the Evidence observation,
+Pattern, Insight or Recommendation itself. Put review rationale such as "scope is
+narrow", "wording may overclaim" or "contradicting evidence exists" in the reason
+or critique fields.
+
 Possible researcher actions include:
 
 * approve

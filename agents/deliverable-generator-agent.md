@@ -55,7 +55,7 @@ For shareable PDF exports, use the configured company-branded report style rathe
 - Use local branding assets from `Research OS/branding/` when present, especially `company-logo.png` and `company-footer.png`.
 - Use the configured accent color, a small logo placed inline beside the title rather than as a large separate header block, short left-aligned section underlines, a light Summary callout with a red left accent line and confidential footer/page numbering.
 - Add the PDF export version to the footer, using the output filename version when present, such as `| V01` or `| V02`.
-- Default to the calm single-column report layout used in the first accepted Picnic/Growthbook research-summary PDF; do not switch to multi-column layouts unless the user explicitly asks.
+- Default to a calm single-column report layout for research summaries; do not switch to multi-column layouts unless the user explicitly asks.
 - Use normal readable report typography; do not shrink body text to a mini font just to force a two-page layout. If the approved content needs more space, prefer a readable extra page over cramped text.
 - Place section accent rules directly under the section title with visible whitespace above and below; do not center the rule inside the section body.
 - Format bullets and numbered items for stakeholder scanning: keep the original bold lead sentence/title slightly larger or stronger than the body, place the explanation directly below it in the same text column without a hanging or stepped indent, use enough whitespace between items and avoid page-wide undifferentiated text blocks.

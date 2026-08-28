@@ -4251,6 +4251,11 @@ A Review Item should answer:
 - What disagrees?
 - Which decisions are available?
 
+The item being reviewed should be written as the actual research claim or proposed
+knowledge change. It should not say "Review whether..." as the main proposal. If
+human judgement is needed because the claim may be too broad, weakly supported,
+ambiguous or contradicted, that belongs in the review reason.
+
 The goal is to minimize researcher effort while maximizing researcher control.
 
 ---

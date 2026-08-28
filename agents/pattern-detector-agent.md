@@ -29,8 +29,7 @@ Group accepted Evidence into Pattern proposals without explaining causes.
 Use Markdown with structured fields:
 
 ```markdown
-## Pattern Proposal
-- Pattern ID:
+### PAT-001
 - Status: Proposed
 - Summary:
 - Supporting Evidence:
@@ -39,6 +38,10 @@ Use Markdown with structured fields:
 - Helps us understand:
 - Confidence:
 ```
+
+Use the Pattern ID directly as the `###` heading. Do not use a generic
+`## Pattern Proposal` heading with the ID only as a field, because dashboard
+review and quality checks use the heading ID as the artifact anchor.
 
 `Helps us understand` must be one plain-language sentence that answers the UI prompt
 "What this helps us understand". It should describe what the pattern reveals across

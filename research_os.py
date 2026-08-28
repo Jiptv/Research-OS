@@ -487,6 +487,9 @@ def title_from_slug(value: str) -> str:
     return re.sub(r"\s+", " ", value.replace("-", " ")).strip().title()
 
 
+EVIDENCE_ID_RE = r"EV-(?:[A-Z]+(?:-[A-Z]+)*-)?\d{3}"
+
+
 def normalize_date(value: str) -> str:
     match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", value)
     if match:
@@ -1835,6 +1838,7 @@ def write_review_queue(round_dir: Path, run_id: str, run_dir: Path) -> Path:
             "Create human-facing Review Items for proposed knowledge changes.",
             "Every Review Item must include ID, Type, Status: Pending, Proposed by, Triggered by, Affected knowledge, Proposed change, Helps us understand, Supporting Evidence, Contradicting Evidence and Available decisions.",
             "Create review items for important proposed Recommendations too. Recommendation review proposals should include `What we learned` and `What we should do` in the Proposed change field.",
+            "For all other Review Items, `Proposed change` must contain the actual Evidence, Pattern, Insight or context statement the researcher should judge. Do not write meta-review wording such as 'Review whether this should remain...' or 'Review whether the wording is precise enough...' as the proposal. Put why human judgment is needed in `Review reason`, `Triggered by`, uncertainty or contradiction fields.",
             "Write `Helps us understand` as one plain-language sentence that completes this UI prompt: 'What this helps us understand'. Do not write a vague justification for why review is needed.",
             "Do not update Current Understanding directly.",
             research_lens_prompt_block(round_dir, include_content=True),
@@ -2179,7 +2183,7 @@ def review_analytics(review_dir: Path, deliverables_dir: Path | None = None) -> 
 
 def source_coverage_summary(round_dir: Path, source_items: list[dict], evidence_blocks: list[tuple[str, str]] | None = None) -> dict:
     evidence_path = round_path(round_dir, "evidence") / "evidence.md"
-    blocks = evidence_blocks if evidence_blocks is not None else markdown_blocks_for_heading(evidence_path, r"^###\s+(EV-[A-Z]+(?:-[A-Z]+)*-\d{3})\s*$")
+    blocks = evidence_blocks if evidence_blocks is not None else artifact_blocks_for_file(evidence_path, EVIDENCE_ID_RE, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"])
     source_units = {item["top_level"]: item for item in source_items}
     coverage_sources = [
         item
@@ -2246,7 +2250,7 @@ def round_first_run_checklist(round_dir: Path, source_total: int, waiting_count:
         {"label": "Input processed", "done": source_total > 0 and waiting_count == 0, "hint": "Use Run input after adding or changing sources."},
         {"label": "Synthesis started", "done": evidence_total > 0 or bool(latest), "hint": "Use Run synthesis after input processing."},
         {"label": "Reviews handled", "done": review_count == 0 and evidence_total > 0, "hint": "Review pending Evidence, Patterns, Insights or Recommendations."},
-        {"label": "Output started", "done": deliverable_files > 0, "hint": "Use Check output after synthesis is reviewed."},
+        {"label": "Output started", "done": deliverable_files > 0, "hint": "Choose the next deliverable after synthesis is reviewed."},
     ]
     return checks
 
@@ -2889,6 +2893,11 @@ def evidence_detail(evidence_path: Path, item_id: str) -> dict | None:
         return None
     match = re.search(rf"^###\s+{re.escape(item_id)}\s*\n(.*?)(?=\n###\s+|\Z)", text, flags=re.DOTALL | re.MULTILINE)
     if not match:
+        for _heading, block in artifact_blocks_from_text(text, EVIDENCE_ID_RE, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"]):
+            if _heading.upper() == item_id.upper():
+                match = re.match(r"(.*)", block, flags=re.DOTALL)
+                break
+    if not match:
         return None
     block = match.group(1)
     return {
@@ -2910,20 +2919,30 @@ def markdown_item_detail(path: Path, item_id: str, field_name: str) -> dict | No
     except UnicodeDecodeError:
         return None
     match = re.search(rf"^###\s+{re.escape(item_id)}\s*\n(.*?)(?=\n###\s+|\Z)", text, flags=re.DOTALL | re.MULTILINE)
-    if not match:
+    block = match.group(1) if match else ""
+    if not block:
+        prefix = item_id.split("-", 1)[0].upper()
+        generic = {"PAT": r"Pattern Proposal", "INS": r"Insight Proposal", "REC": r"Recommendation Proposal"}.get(prefix, "")
+        id_fields = {"PAT": ["Pattern ID", "ID"], "INS": ["Insight ID", "ID"], "REC": ["Recommendation ID", "ID"]}.get(prefix, ["ID"])
+        id_pattern = {"PAT": r"PAT-\d{3}", "INS": r"INS-\d{3}", "REC": r"REC-\d{3}"}.get(prefix, r"[A-Z]+-\d{3}")
+        if generic:
+            for found_id, found_block in artifact_blocks_from_text(text, id_pattern, generic, id_fields):
+                if found_id.upper() == item_id.upper():
+                    block = found_block
+                    break
+    if not block:
         return None
-    block = match.group(1)
     return {
         "id": item_id,
         "status": markdown_field(block, "Status"),
-        "statement": markdown_field(block, field_name),
+        "statement": markdown_field(block, field_name, "Statement", "Insight", "Pattern", "Summary"),
         "what_we_learned": markdown_field(block, "What we learned", "Learned"),
         "what_we_should_do": markdown_field(block, "What we should do", "Recommendation"),
         "options": markdown_field(block, "Options"),
         "tradeoff": markdown_field(block, "Tradeoff", "Trade-off"),
         "based_on": markdown_field(block, "Based on", "Supporting Evidence", "Based on Patterns", "Based on Insights"),
         "type_label": markdown_field(block, "Type", "Labels"),
-        "evidence": markdown_field(block, "Evidence"),
+        "evidence": markdown_field(block, "Evidence", "Based on Evidence", "Supporting Evidence"),
         "supporting_evidence": markdown_field(block, "Supporting Evidence"),
         "patterns": markdown_field(block, "Based on Patterns"),
         "insights": markdown_field(block, "Based on Insights"),
@@ -2991,7 +3010,7 @@ def expanded_review_items(path: Path) -> list[dict]:
     quality_gates = {}
     if round_dir:
         source_total = len(source_inventory(round_path(round_dir, "sources")))
-        evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+-\d{3}\b")
+        evidence_total = len(artifact_blocks_for_file(round_path(round_dir, "evidence") / "evidence.md", EVIDENCE_ID_RE, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"]))
         quality_gates = round_quality_gates(round_dir, source_total=source_total, evidence_total=evidence_total)
 
     def item_gate_issues(stage: str, *ids: str) -> list[dict]:
@@ -3002,8 +3021,14 @@ def expanded_review_items(path: Path) -> list[dict]:
 
     for item in parse_markdown_review_items(path):
         review_text = " ".join([item.get("proposed_change", ""), item.get("reason", ""), item.get("affected_knowledge", "")])
+        supporting_ids = evidence_ids_from_text(item.get("supporting_evidence", ""))
         ids = evidence_ids_from_text(review_text)
+        for evidence_id in supporting_ids:
+            if evidence_id not in ids:
+                ids.append(evidence_id)
         evidence_path = resolve_review_reference(item.get("supporting_evidence", ""), item["file_path"])
+        if (not evidence_path or not evidence_path.exists()) and round_dir and ids:
+            evidence_path = round_path(round_dir, "evidence") / "evidence.md"
         details = []
         if evidence_path and evidence_path.suffix.lower() == ".md":
             for evidence_id in ids:
@@ -3230,14 +3255,14 @@ def update_artifact_item(path: Path, item_id: str, block: str) -> None:
         raise ValueError("Only Markdown artifact files can be edited here.")
     text = read_text(path)
     item_id = item_id.strip().upper()
-    if not re.match(r"^(EV-[A-Z]+-\d{3}|PAT-\d{3}|INS-\d{3}|REC-\d{3})$", item_id):
+    if not re.match(rf"^({EVIDENCE_ID_RE}|PAT-\d{{3}}|INS-\d{{3}}|REC-\d{{3}})$", item_id):
         raise ValueError("Unsupported artifact item ID.")
     clean_block = block.strip()
     if not clean_block:
         raise ValueError("Edited block cannot be empty.")
     if not re.match(rf"^###\s+{re.escape(item_id)}\s*$", clean_block, flags=re.MULTILINE | re.IGNORECASE):
         clean_block = f"### {item_id}\n{clean_block}"
-    pattern = rf"^###\s+{re.escape(item_id)}\s*\n.*?(?=\n###\s+(?:EV-[A-Z]+-\d{{3}}|PAT-\d{{3}}|INS-\d{{3}}|REC-\d{{3}})\s*$|\Z)"
+    pattern = rf"^###\s+{re.escape(item_id)}\s*\n.*?(?=\n###\s+(?:{EVIDENCE_ID_RE}|PAT-\d{{3}}|INS-\d{{3}}|REC-\d{{3}})\s*$|\Z)"
     if not re.search(pattern, text, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE):
         raise ValueError(f"Artifact item not found: {item_id}")
     updated = re.sub(pattern, clean_block.rstrip() + "\n", text, count=1, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE)
@@ -3282,6 +3307,13 @@ def review_summary_text(item: dict, base_file: Path) -> str:
         if document:
             return f"Should Research OS use '{document}' as reusable project context for future research rounds?"
         return "Should Research OS use this document as reusable project context for future research rounds?"
+    if re.match(r"^\s*Review whether\b", summary, flags=re.IGNORECASE):
+        reason = (item.get("reason") or "").strip()
+        if reason:
+            return reason
+        affected = (item.get("affected_knowledge") or item.get("supporting_evidence") or "").strip()
+        if affected:
+            return f"Review the content of {affected}, not this meta instruction."
     return summary or "No proposal summary available."
 
 
@@ -3317,7 +3349,7 @@ def resolve_review_reference(reference: str, base_file: Path) -> Path | None:
     clean = reference.strip().strip("`")
     if not clean or clean.lower() in {"none", "not assessed yet"}:
         return None
-    if len(clean) > 180 or re.search(r"\b(EV-[A-Z]+-\d{3}|PAT-\d{3}|INS-\d{3}|REC-\d{3})\b", clean, flags=re.IGNORECASE):
+    if len(clean) > 180 or re.search(rf"\b({EVIDENCE_ID_RE}|PAT-\d{{3}}|INS-\d{{3}}|REC-\d{{3}})\b", clean, flags=re.IGNORECASE):
         return None
     if clean.lower().startswith(("based on:", "evidence:", "patterns:", "insights:", "source reference:")):
         return None
@@ -3603,10 +3635,10 @@ def source_snippet_html(item: dict, base_file: Path) -> str:
 
 def evidence_ids_from_text(text: str) -> list[str]:
     found: list[str] = []
-    for prefix, start, end in re.findall(r"\b(EV-[A-Z]+-)(\d{3})\s+through\s+(?:EV-[A-Z]+-)?(\d{3})\b", text, flags=re.IGNORECASE):
+    for prefix, start, end in re.findall(r"\b(EV-(?:[A-Z]+(?:-[A-Z]+)*-)?)(\d{3})\s+through\s+(?:EV-(?:[A-Z]+(?:-[A-Z]+)*-)?)?(\d{3})\b", text, flags=re.IGNORECASE):
         for number in range(int(start), int(end) + 1):
             found.append(f"{prefix.upper()}{number:03d}")
-    for item_id in re.findall(r"\bEV-[A-Z]+-\d{3}\b", text, flags=re.IGNORECASE):
+    for item_id in re.findall(rf"\b{EVIDENCE_ID_RE}\b", text, flags=re.IGNORECASE):
         found.append(item_id.upper())
     deduped = []
     for item_id in found:
@@ -3641,15 +3673,14 @@ def evidence_preview_html(item: dict, base_file: Path) -> str:
         return ""
     previews = []
     for item_id in ids:
-        match = re.search(rf"^###\s+{re.escape(item_id)}\s*\n(.*?)(?=\n###\s+|\Z)", text, flags=re.DOTALL | re.MULTILINE)
-        if not match:
+        detail = evidence_detail(evidence_path, item_id)
+        if not detail:
             continue
-        block = match.group(1)
-        observation = markdown_field(block, "Observation")
-        question = markdown_field(block, "Research Question")
-        note = markdown_field(block, "Helps us understand", "Interpretation note")
-        source = markdown_field(block, "Source")
-        moment = markdown_field(block, "Source reference")
+        observation = detail.get("observation", "")
+        question = detail.get("research_question", "")
+        note = detail.get("interpretation_note", "")
+        source = detail.get("source", "")
+        moment = detail.get("source_reference", "")
         previews.append(
             f"""<li>
               <div><strong>{html.escape(item_id)}</strong><span>{html.escape(question)}</span></div>
@@ -3671,13 +3702,13 @@ def review_question(item: dict) -> str:
     if stage == "learning":
         return "Should Research OS learn this for future analysis?"
     if stage == "evidence":
-        return "Should this evidence move into synthesis?"
+        return "Use this evidence in synthesis?"
     if stage == "patterns":
-        return "Should this pattern move into insights?"
+        return "Use this pattern for insights?"
     if stage == "insights":
-        return "Should this insight move into deliverables?"
+        return "Use this insight for recommendations and outputs?"
     if stage == "recommendations":
-        return "Should this recommendation move into outputs?"
+        return "Use this recommendation in outputs?"
     if stage == "deliverables":
         return "Should this deliverable be used?"
     item_type = item.get("type", "").lower()
@@ -3693,11 +3724,11 @@ def review_explanation(item: dict) -> str:
     if stage == "learning":
         return "You are reviewing a Research OS-wide learning inferred from your feedback. If accepted, it will inform future Codex/Cowork analysis prompts."
     if stage == "evidence":
-        return "You are reviewing Evidence: one source-backed observation before it feeds patterns and insights."
+        return "You are reviewing one source-backed observation. Check whether the wording is accurate enough to use in the next synthesis steps."
     if stage == "patterns":
-        return "You are reviewing Patterns: a cross-evidence theme before it feeds insights."
+        return "You are reviewing a pattern across evidence. Check whether it is concrete, supported and clear enough to turn into insight."
     if stage == "insights":
-        return "You are reviewing Insights: synthesized meaning before it feeds deliverables."
+        return "You are reviewing synthesized meaning. Check whether it is supported and specific enough to shape recommendations and outputs."
     if stage == "recommendations":
         return "You are reviewing Recommendations: what Research OS learned and what it suggests changing before outputs are created."
     if stage == "deliverables":
@@ -3825,43 +3856,79 @@ def simple_markdown_html(text: str) -> str:
     return "\n".join(html_lines)
 
 
+def artifact_blocks_from_text(text: str, direct_id_pattern: str, generic_heading: str = "", id_fields: list[str] | None = None) -> list[tuple[str, str]]:
+    found: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    direct_matches = list(re.finditer(rf"^###\s+({direct_id_pattern})\s*$", text, flags=re.MULTILINE | re.IGNORECASE))
+    for index, match in enumerate(direct_matches):
+        item_id = match.group(1).upper()
+        start = match.end()
+        end = direct_matches[index + 1].start() if index + 1 < len(direct_matches) else len(text)
+        found.append((match.start(), item_id, text[start:end]))
+        seen.add(item_id)
+    if generic_heading:
+        generic_matches = list(re.finditer(rf"^##\s+{generic_heading}\s*$", text, flags=re.MULTILINE | re.IGNORECASE))
+        fields = id_fields or ["ID"]
+        for index, match in enumerate(generic_matches):
+            start = match.end()
+            end = generic_matches[index + 1].start() if index + 1 < len(generic_matches) else len(text)
+            block = text[start:end]
+            item_id = ""
+            for field in fields:
+                candidate = markdown_field(block, field)
+                if candidate and re.fullmatch(direct_id_pattern, candidate, flags=re.IGNORECASE):
+                    item_id = candidate.upper()
+                    break
+            if item_id and item_id not in seen:
+                found.append((match.start(), item_id, block))
+                seen.add(item_id)
+    return [(item_id, block) for _pos, item_id, block in sorted(found, key=lambda item: item[0])]
+
+
 def artifact_card_items(text: str, kind: str) -> list[dict]:
     config = {
         "evidence": {
-            "pattern": r"^###\s+(EV-[A-Z]+-\d{3})\s*$",
+            "pattern": EVIDENCE_ID_RE,
+            "generic_heading": r"Evidence(?:\s+Item)?",
+            "id_fields": ["Evidence ID", "ID"],
             "statement": "Observation",
             "meta": ["Research Question", "Source", "Source reference", "Helps us understand", "Interpretation note"],
         },
         "patterns": {
-            "pattern": r"^###\s+(PAT-\d{3})\s*$",
+            "pattern": r"PAT-\d{3}",
+            "generic_heading": r"Pattern Proposal",
+            "id_fields": ["Pattern ID", "ID"],
             "statement": "Pattern",
+            "statement_fallbacks": ["Pattern", "Statement", "Summary"],
             "meta": ["Evidence", "Helps us understand", "Confidence"],
         },
         "insights": {
-            "pattern": r"^###\s+(INS-\d{3})\s*$",
+            "pattern": r"INS-\d{3}",
+            "generic_heading": r"Insight Proposal",
+            "id_fields": ["Insight ID", "ID"],
             "statement": "Insight",
+            "statement_fallbacks": ["Insight", "Statement", "Summary"],
             "meta": ["Based on Patterns", "Helps us understand", "Confidence"],
         },
         "recommendations": {
-            "pattern": r"^###\s+(REC-\d{3})\s*$",
+            "pattern": r"REC-\d{3}",
+            "generic_heading": r"Recommendation Proposal",
+            "id_fields": ["Recommendation ID", "ID"],
             "statement": "What we should do",
             "meta": ["What we learned", "Based on", "Type", "Options", "Tradeoff", "Confidence", "Validation needed", "Open Questions"],
         },
     }.get(kind)
     if not config:
         return []
-    matches = list(re.finditer(config["pattern"], text, flags=re.MULTILINE | re.IGNORECASE))
     items = []
-    for index, match in enumerate(matches):
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        block = text[start:end]
+    for item_id, block in artifact_blocks_from_text(text, config["pattern"], config.get("generic_heading", ""), config.get("id_fields", [])):
+        statement_fields = config.get("statement_fallbacks") or [config["statement"]]
         items.append(
             {
-                "id": match.group(1).upper(),
+                "id": item_id,
                 "status": markdown_field(block, "Status"),
-                "statement": markdown_field(block, config["statement"]),
-                "block": f"### {match.group(1).upper()}\n{block.strip()}\n",
+                "statement": markdown_field(block, *statement_fields),
+                "block": f"### {item_id}\n{block.strip()}\n",
                 "meta": [
                     (field, markdown_field(block, field))
                     for field in config["meta"]
@@ -4248,18 +4315,18 @@ def project_action(project_dir: Path, key: str) -> dict:
     project_rel = rel(project_dir)
     if key == "context":
         target = project_path(project_dir, "sources")
-        instruction = "Add durable project context sources here. After adding files, use the dashboard prompt to process them in Codex/Cowork."
-        prompt = f"Process any new or changed project-level context sources for this Research OS project in Codex/Cowork: {project_rel}. First read {rel(LOOPED_ACTIVE_FILE)} and apply any active Looped Learnings. Do not call APIs, do not run local stubs, and do not use backend processing. Update the Research OS documents directly, keep proposals pending for web UI review, update {PROJECT_STATE_FILE} when sources are genuinely processed, then summarize what changed and what still needs review."
+        instruction = "Project sources are reusable input for the whole project, such as strategy notes, product context, stakeholder docs or earlier research. Only process them when new files are waiting."
+        prompt = f"Process any new or changed project-level context sources for this Research OS project in Codex/Cowork: {project_rel}. First read {rel(LOOPED_ACTIVE_FILE)} and apply any active Looped Learnings. Do not call APIs, do not run local stubs, and do not use backend processing. Update the Research OS documents directly. Treat project-level source files as accepted input context; do not create review items that merely ask whether a raw source should be used. Only create web UI review proposals for distilled project understanding, reusable assumptions, open questions or context changes that need researcher judgment. Update {PROJECT_STATE_FILE} when sources are genuinely processed, then summarize what changed and what still needs review."
         action = dashboard_action("Open project sources", target, instruction, prompt)
         action["button_label"] = "Process context"
         action["copy_label"] = "process project context"
         return action
     if key == "background":
         target = project_file(project_dir, "context")
-        instruction = "This is the durable project background that you can edit yourself. It should contain context that applies across multiple research rounds."
+        instruction = "Project Background is the stable context a new researcher or AI should know before reading a round: product area, problem space, decisions in scope, known constraints, important history and terms. Keep it durable across rounds; put round-specific setup in the round background instead."
         return dashboard_action("Open project background", target, instruction, "")
     target = project_path(project_dir, "reviews") / "project-context-proposals.md"
-    instruction = "Review Project Context proposals yourself in the web UI. Add notes, then choose Approve, Reject or Revise."
+    instruction = "Review distilled Project Context proposals yourself in the web UI. These should be deeper interpretations of project background, assumptions or reusable context, not raw source inclusion decisions."
     return dashboard_action("Review in UI", target, instruction, "")
 
 
@@ -4280,6 +4347,7 @@ Rules:
 - Check lightweight quality gates while updating synthesis: traceability/timestamps, support strength, contradicting evidence, assumptions/open questions and `Helps us understand` fields.
 - Do not over-compress Patterns, Insights or Recommendations. Every item must stand alone: make clear what was unclear/useful/risky/actionable, not only that something should be better.
 - Maintain Recommendations as a living synthesis layer. Each Recommendation should include `What we learned` and `What we should do`, with optional options/tradeoff when the research supports multiple routes.
+- When creating review queue items, `Proposed change` must contain the actual Evidence, Pattern, Insight or Recommendation text the researcher should judge. Do not write meta-review instructions such as "Review whether..." as the proposal. Put why judgment is needed in `Review reason` or `Triggered by`.
 - Process only the new or changed source files listed below unless I explicitly ask for a broader reprocess.
 - Update Research OS documents directly: source representations, evidence observations, patterns, insights, recommendations and review queue where needed.
 - Keep review decisions pending in the web UI.
@@ -4305,7 +4373,8 @@ Rules:
 - Read the existing project context, current understanding, project source representations and project context proposal queue.
 - Process only the new or changed project-level source files listed below unless I explicitly ask for a broader reprocess.
 - Update Research OS documents directly: project source representations and project context proposals where needed.
-- Keep proposed project context as pending reviews in the web UI.
+- Treat project-level source files as accepted input context. Do not create review items that merely ask whether a raw source should be used.
+- Keep only distilled project understanding, reusable assumptions, open questions or context changes as pending reviews in the web UI.
 - After processing, update `{PROJECT_STATE_FILE}` for the processed source checksums and add a run entry with status `codex-complete`.
 - Report what changed and what still needs review.
 
@@ -4330,8 +4399,17 @@ def markdown_blocks_for_heading(path: Path, pattern: str) -> list[tuple[str, str
     return blocks
 
 
+def artifact_blocks_for_file(path: Path, direct_id_pattern: str, generic_heading: str = "", id_fields: list[str] | None = None) -> list[tuple[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        return artifact_blocks_from_text(read_text(path), direct_id_pattern, generic_heading, id_fields)
+    except UnicodeDecodeError:
+        return []
+
+
 def evidence_ids_in(text: str) -> list[str]:
-    return sorted(set(re.findall(r"\bEV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b", text, flags=re.IGNORECASE)))
+    return sorted(set(re.findall(rf"\b{EVIDENCE_ID_RE}\b", text, flags=re.IGNORECASE)))
 
 
 def pattern_ids_in(text: str) -> list[str]:
@@ -4448,8 +4526,8 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
     insight_path = round_path(round_dir, "insights") / "insights.md"
     recommendation_path = round_path(round_dir, "recommendations") / "recommendations.md"
 
-    evidence_id_pattern = r"EV-[A-Z]+(?:-[A-Z]+)*-\d{3}"
-    evidence_blocks = markdown_blocks_for_heading(evidence_path, rf"^###\s+({evidence_id_pattern})\s*$")
+    evidence_id_pattern = EVIDENCE_ID_RE
+    evidence_blocks = artifact_blocks_for_file(evidence_path, evidence_id_pattern, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"])
     if source_total and evidence_total and evidence_total < source_total * 8:
         gates["evidence"].append(
             {
@@ -4486,7 +4564,7 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
             }
         )
 
-    for item_id, block in markdown_blocks_for_heading(pattern_path, r"^###\s+(PAT-\d{3})\s*$"):
+    for item_id, block in artifact_blocks_for_file(pattern_path, r"PAT-\d{3}", r"Pattern Proposal", ["Pattern ID", "ID"]):
         ids = evidence_ids_in(" ".join([markdown_field(block, "Supporting Evidence", "Evidence"), block]))
         if len(ids) < 2:
             gates["patterns"].append({"id": item_id, "message": "Pattern has fewer than 2 supporting evidence items."})
@@ -4495,7 +4573,7 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
         if weak_reference(markdown_field(block, "Helps us understand")):
             gates["patterns"].append({"id": item_id, "message": "Missing what this pattern helps us understand."})
 
-    for item_id, block in markdown_blocks_for_heading(insight_path, r"^###\s+(INS-\d{3})\s*$"):
+    for item_id, block in artifact_blocks_for_file(insight_path, r"INS-\d{3}", r"Insight Proposal", ["Insight ID", "ID"]):
         if not pattern_ids_in(markdown_field(block, "Supporting Patterns", "Based on Patterns")):
             gates["insights"].append({"id": item_id, "message": "Insight is not linked to supporting patterns."})
         if not evidence_ids_in(markdown_field(block, "Supporting Evidence")):
@@ -4506,10 +4584,10 @@ def round_quality_gates(round_dir: Path, source_total: int = 0, evidence_total: 
             gates["insights"].append({"id": item_id, "message": "Missing assumptions or open questions."})
         if weak_reference(markdown_field(block, "Helps us understand")):
             gates["insights"].append({"id": item_id, "message": "Missing what this insight helps us understand."})
-        if len(markdown_field(block, "Insight").split()) < 12:
+        if len(markdown_field(block, "Insight", "Statement").split()) < 12:
             gates["insights"].append({"id": item_id, "message": "Insight may be too compressed to stand alone."})
 
-    for item_id, block in markdown_blocks_for_heading(recommendation_path, r"^###\s+(REC-\d{3})\s*$"):
+    for item_id, block in artifact_blocks_for_file(recommendation_path, r"REC-\d{3}", r"Recommendation Proposal", ["Recommendation ID", "ID"]):
         if weak_reference(markdown_field(block, "What we learned", "Learned")):
             gates["recommendations"].append({"id": item_id, "message": "Missing 'What we learned'."})
         if weak_reference(markdown_field(block, "What we should do", "Recommendation")):
@@ -4611,11 +4689,11 @@ def build_round_dashboard(round_dir: Path) -> dict:
     ensure_round_recommendations_scaffold(round_dir)
     waiting = waiting_sources(source_dir, state, source_items)
     source_processed = max(source_total - len(waiting), 0)
-    evidence_blocks = markdown_blocks_for_heading(round_path(round_dir, "evidence") / "evidence.md", r"^###\s+(EV-[A-Z]+(?:-[A-Z]+)*-\d{3})\s*$")
+    evidence_blocks = artifact_blocks_for_file(round_path(round_dir, "evidence") / "evidence.md", EVIDENCE_ID_RE, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"])
     evidence_total = len(evidence_blocks)
-    pattern_total = markdown_heading_count(round_path(round_dir, "patterns"), r"^###\s+PAT-\d{3}\b")
-    insight_total = markdown_heading_count(round_path(round_dir, "insights"), r"^###\s+INS-\d{3}\b")
-    recommendation_total = markdown_heading_count(round_path(round_dir, "recommendations"), r"^###\s+REC-\d{3}\b")
+    pattern_total = len(artifact_blocks_for_file(round_path(round_dir, "patterns") / "patterns.md", r"PAT-\d{3}", r"Pattern Proposal", ["Pattern ID", "ID"]))
+    insight_total = len(artifact_blocks_for_file(round_path(round_dir, "insights") / "insights.md", r"INS-\d{3}", r"Insight Proposal", ["Insight ID", "ID"]))
+    recommendation_total = len(artifact_blocks_for_file(round_path(round_dir, "recommendations") / "recommendations.md", r"REC-\d{3}", r"Recommendation Proposal", ["Recommendation ID", "ID"]))
     deliverable_items = deliverable_dashboard_items(round_path(round_dir, "deliverables"))
     deliverable_files = sum(1 for item in deliverable_items if item.get("exists"))
     deliverable_open_count = sum(int(item.get("review") or 0) for item in deliverable_items if item.get("exists") and item.get("status") == "yellow")
@@ -5250,6 +5328,11 @@ def deliverable_ai_prompt(deliverables_dir: Path, deliverable_type: str, fallbac
     )
     if deliverable_type == "research-summary":
         prerequisite = "Create or update the research summary directly from accepted Evidence, Patterns, Insights and Recommendations."
+    preflight = (
+        "Before doing any deliverable work, first do the Output check yourself: confirm there are no open synthesis review items "
+        "and that this deliverable is the next allowed step in the Research OS output lifecycle. If something still blocks it, "
+        "report the blocker instead of drafting."
+    )
     return {
         "label": f"{action_verb} {fallback_title}",
         "button_label": action_verb,
@@ -5263,6 +5346,7 @@ Markdown source file for review: {rel(output)}
 
 First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.
 {lens_block}
+{preflight}
 {prerequisite}
 
 Deliverable purpose:
@@ -5316,7 +5400,7 @@ Use the configured company-branded report style for Research OS PDF deliverables
 - Use local branding assets from Research OS/branding/ when present, especially company-logo.png and company-footer.png.
 - Use the configured accent color, a small logo placed inline beside the title rather than as a large separate header block, short left-aligned section underlines, a light Summary callout with a red left accent line and confidential footer/page numbering.
 - Add the PDF export version to the footer, using the output filename version when present, such as `| V01` or `| V02`.
-- Default to the calm single-column report layout used in the first accepted Picnic/Growthbook research-summary PDF; do not switch to multi-column layouts unless the user explicitly asks.
+- Default to a calm single-column report layout for research summaries; do not switch to multi-column layouts unless the user explicitly asks.
 - Use normal readable report typography; do not shrink body text to a mini font just to force a two-page layout. If the approved content needs more space, prefer a readable extra page over cramped text.
 - Place section accent rules directly under the section title with visible whitespace above and below; do not center the rule inside the section body.
 - Format bullets and numbered items for stakeholder scanning: keep the original bold lead sentence/title slightly larger or stronger than the body, place the explanation directly below it in the same text column without a hanging or stepped indent, use enough whitespace between items and avoid page-wide undifferentiated text blocks.
@@ -5596,6 +5680,7 @@ After updating, report exactly which sections changed and confirm the deliverabl
       .toast { position: fixed; left: 50%; bottom: 18px; z-index: 1200; max-width: min(420px, calc(100vw - 36px)); border:1px solid var(--line); border-radius:12px; background:#222; color:#fff; box-shadow:0 14px 34px rgba(32,43,64,.18); padding:10px 12px; font-size:12px; font-weight:400; opacity:0; transform:translate(-50%, 8px); pointer-events:none; transition:opacity .16s ease, transform .16s ease; }
       .toast.show { opacity:1; transform:translate(-50%, 0); }
       .raw { margin-top:18px; }
+      .deliverable-bottom-actions { display:flex; justify-content:center; margin:22px 0 4px; }
     """
     return f"""<!doctype html><html><head><title>{title}</title><style>{deliverable_style}</style></head><body><main>
       <header class="deliverable-top">
@@ -5609,6 +5694,7 @@ After updating, report exactly which sections changed and confirm the deliverabl
       </header>
       <section class="deliverable-grid">{"".join(review_cards)}</section>
       <details class="raw"><summary>Raw Markdown</summary><pre>{html.escape(text)}</pre></details>
+      <div class="deliverable-bottom-actions"><a class="deliverable-back" href="/dashboard">← Back to dashboard</a></div>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <script>
         const path = "{path_attr}";
@@ -5651,6 +5737,12 @@ After updating, report exactly which sections changed and confirm the deliverabl
           showToast("Copied revise prompt");
           setTimeout(() => button.textContent = original, 1200);
         }}));
+        window.addEventListener("pageshow", event => {{
+          const nav = performance.getEntriesByType("navigation")[0];
+          if (event.persisted || (nav && nav.type === "back_forward")) {{
+            location.reload();
+          }}
+        }});
       </script>
     </main></body></html>"""
 
@@ -5907,33 +5999,22 @@ def review_proposal_html(item: dict, target: Path) -> str:
     return f'<div class="review-summary{changed_class}"><span>Proposal</span>{changed_badge}<p>{html.escape(summary)}</p></div>{learning_context}'
 
 
-def review_why_html(item: dict) -> str:
+def review_context_note_html(item: dict) -> str:
     parts: list[str] = []
     affected = (item.get("affected_knowledge") or "").strip()
     triggered = (item.get("triggered_by") or "").strip()
     superseded = item.get("superseded_decision")
     if isinstance(superseded, dict):
-        decision_date = superseded.get("date", "")
-        old_decision = superseded.get("decision", "previous decision")
-        prefix = f"Previously {old_decision.lower()}"
-        if decision_date:
-            prefix += f" on {decision_date}"
-        parts.append(f"{prefix}; this item changed after that review.")
+        parts.append("Changed after earlier review.")
     elif affected:
-        parts.append(f"This is not necessarily a brand-new item. It is a changed version of {affected}.")
+        parts.append(f"Updated version of {affected}.")
     elif item.get("changed_fields"):
-        parts.append("This item changed since its last review, so the previous review no longer fully covers it.")
+        parts.append("Changed since last review.")
     if triggered:
-        parts.append(f"Why now: {triggered}.")
-    if affected:
-        parts.append(f"What to check: whether the updated {affected} framing is still right enough to use downstream.")
+        parts.append(triggered.rstrip(".") + ".")
     if not parts:
         return ""
-    rows = "".join(f"<li>{html.escape(part)}</li>" for part in parts)
-    return f"""<section class="review-why">
-      <h3>Why review this?</h3>
-      <ul>{rows}</ul>
-    </section>"""
+    return f'<p class="review-context-note"><span>Review context</span>{html.escape(" ".join(parts))}</p>'
 
 
 def review_item_context(item: dict, target: Path) -> tuple[str, str, str, str, str, str]:
@@ -5963,12 +6044,11 @@ def review_item_context(item: dict, target: Path) -> tuple[str, str, str, str, s
     gates = review_quality_gate_html(item)
     meta_html = f'<dl>{"".join(meta_rows)}</dl>'
     evidence_html = f"{preview or snippet}{gates}"
-    why_html = review_why_html(item)
     return (
         review_question(item),
         review_explanation(item),
         review_choice_hint(item),
-        f"{why_html}{review_proposal_html(item, target)}",
+        review_proposal_html(item, target),
         evidence_html,
         meta_html,
     )
@@ -6034,7 +6114,7 @@ def review_decided_controls(item: dict, labels: dict[str, str]) -> str:
 
 def synthesis_after_reviews_prompt(round_dir: Path) -> str:
     source_total = len(source_inventory(round_path(round_dir, "sources")))
-    evidence_total = markdown_heading_count(round_path(round_dir, "evidence"), r"^###\s+EV-[A-Z]+(?:-[A-Z]+)*-\d{3}\b")
+    evidence_total = len(artifact_blocks_for_file(round_path(round_dir, "evidence") / "evidence.md", EVIDENCE_ID_RE, r"Evidence(?:\s+Item)?", ["Evidence ID", "ID"]))
     gates = round_quality_gates(round_dir, source_total=source_total, evidence_total=evidence_total)
     gate_lines = []
     for stage_name, issues in gates.items():
@@ -6088,7 +6168,7 @@ def review_complete_next_step_html(target: Path, stage: str = "") -> str:
                 "insights": "Codex will apply your Insight decisions and update Recommendations.",
                 "recommendations": "Codex will apply your Recommendation decisions and prepare the round for Output.",
             }.get(stage, "Codex will apply your completed decisions and continue the next safe synthesis step.")
-            description = f"You handled {stage_label.lower()}. {stage_next} New or changed items stay reviewable in the web UI."
+            description = f"Required after every review round, even when you accepted everything. You handled {stage_label.lower()}; now run synthesis so Codex actually applies those decisions. {stage_next} New or changed items stay reviewable in the web UI."
             label = "Copy prompt"
         elif project_dir:
             prompt_name = "Process context"
@@ -6108,7 +6188,8 @@ Report what changed, what was not changed, and what still needs review."""
             label = "Copy prompt"
         else:
             return '<div class="done-next"><h3>Next step</h3><p>Return to the dashboard to see the next safe Research OS action.</p><a class="done-link" href="/dashboard">Back to dashboard</a></div>'
-    return f"""<div class="done-next">
+    card_class = "done-next synthesis-next" if prompt_name == "Run synthesis" else "done-next"
+    return f"""<div class="{card_class}">
       <h3>Run this prompt: {html.escape(prompt_name)}</h3>
       <p>{html.escape(description)}</p>
       <button type="button" data-copy-next-prompt="{html.escape(prompt, quote=True)}" data-copy-label="{html.escape(prompt_name, quote=True)}">{html.escape(label)}</button>
@@ -6176,6 +6257,7 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
                 <div class="focus-controls" data-control-for="{html.escape(item['id'])}">{controls}</div>
                 <template data-edit-template="{html.escape(item['id'])}">{edit_controls}</template>
                 <p class="{reason_class}"><span>{html.escape(review_reason_label(item))}</span>{html.escape(reason)}</p>
+                {review_context_note_html(item)}
               </section>
               <section class="focus-context">{evidence_html}<div class="review-meta">{meta_html}</div></section>
             </article>"""
@@ -6243,10 +6325,8 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
       .transcript-line time { color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; }
       .transcript-line p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.4; }
       .review-action { display: grid; gap: 12px; min-width: 0; }
-      .review-why { border:1px solid var(--status-warning-bg); border-radius:7px; background:var(--status-warning-soft-bg); padding:10px 12px; color:var(--fg-2); }
-      .review-why h3 { margin:0 0 6px; color:var(--status-warning); font-size:11px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; }
-      .review-why ul { margin:0; padding-left:18px; display:grid; gap:4px; }
-      .review-why li { margin:0; font-size:13px; line-height:1.4; }
+      .review-context-note { margin:0; color:var(--fg-3); font-size:12px; line-height:1.35; }
+      .review-context-note span { margin-right:6px; color:var(--fg-2); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
       .review-summary { width: 100%; min-width: 0; overflow-wrap: anywhere; font-size: 16px; color: var(--fg-1); background: var(--ai-purple-bg); border-left: 3px solid var(--ai-purple); border-radius: 5px; padding: 12px 14px; margin: 0; }
       .changed-review-field { box-shadow:none; }
       .review-summary.changed-review-field { background:var(--ai-purple-bg) !important; }
@@ -6282,11 +6362,14 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
       .done { display:none; max-width: 720px; margin: 80px auto; text-align:center; color:var(--fg-2); }
       .done.active { display:block; }
       .done-next { margin:24px auto 0; max-width:560px; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 8px 22px rgba(31,43,70,.06); padding:14px; text-align:left; }
+      .done-next.synthesis-next { border-color:var(--status-warning-bg); background:var(--status-warning-soft-bg); }
       .done-next h3 { margin:0 0 5px; color:var(--fg-1); font-size:14px; line-height:1.25; }
       .done-next p { margin:0 0 12px; color:var(--fg-2); font-size:13px; line-height:1.45; }
       .done-next button, .done-link { min-height:30px; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(124,58,237,.35); border-radius:999px; background:#fff; color:var(--ai-purple); padding:0 11px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; text-decoration:none; }
       .done-next button:hover, .done-link:hover { border-color:var(--ai-purple); background:var(--ai-purple-bg); color:var(--ai-purple-dark); text-decoration:none; }
       .done-link { margin-left:6px; border-color:var(--border-muted); color:var(--fg-2); }
+      .done-countdown { margin:14px 0 0; color:var(--fg-3); font-size:12px; line-height:1.35; }
+      .done-countdown strong { color:var(--fg-2); font-weight:650; }
       .toast { position: fixed; left: 50%; bottom: 18px; z-index: 1200; max-width: min(420px, calc(100vw - 36px)); border:1px solid var(--line); border-radius:12px; background:#222; color:#fff; box-shadow:0 14px 34px rgba(32,43,64,.18); padding:10px 12px; font-size:12px; font-weight:400; opacity:0; transform:translate(-50%, 8px); pointer-events:none; transition:opacity .16s ease, transform .16s ease; }
       .toast.show { opacity:1; transform:translate(-50%, 0); }
       .doc-reference { display: grid; gap: 2px; color: inherit; text-decoration: none; }
@@ -6311,14 +6394,33 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
         <div class="focus-nav"><span class="focus-count" id="focusCount"></span><button type="button" id="prevBtn">← Previous</button><button type="button" id="nextBtn">Next →</button></div>
       </header>
       {lens_notice}
-      <section class="focus-wrap">{body}<div class="done" id="doneState"><h2>All reviews handled</h2><p>No open review items remain in this queue.</p>{next_step_html}</div></section>
+      <section class="focus-wrap">{body}<div class="done" id="doneState"><h2>All reviews handled</h2><p>No open review items remain in this queue.</p>{next_step_html}<p class="done-countdown" id="doneCountdown" aria-live="polite"></p></div></section>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <script>
         const reviewPath = {path_js};
         const cards = Array.from(document.querySelectorAll(".focus-card"));
         const decisionLabels = {{ Approve: "Yes, use this", Revise: "Needs changes", Reject: "No, don't use" }};
+        let dashboardCountdownTimer = null;
         let current = cards.findIndex(card => card.dataset.pending === "true");
         if (current < 0) current = cards.length ? 0 : -1;
+        function startDashboardCountdown() {{
+          if (dashboardCountdownTimer) return;
+          const countdown = document.getElementById("doneCountdown");
+          let remaining = 30;
+          const update = () => {{
+            if (countdown) countdown.innerHTML = `Going automatically back to dashboard in <strong>${{remaining}}</strong> seconds.`;
+          }};
+          update();
+          dashboardCountdownTimer = setInterval(() => {{
+            remaining -= 1;
+            if (remaining <= 0) {{
+              clearInterval(dashboardCountdownTimer);
+              window.location.href = "/dashboard";
+              return;
+            }}
+            update();
+          }}, 1000);
+        }}
         function showToast(message) {{
           const toast = document.getElementById("toast");
           if (!toast) return;
@@ -6341,6 +6443,7 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
           const done = document.getElementById("doneState");
           if (!cards.length || index < 0) {{
             done.classList.add("active");
+            startDashboardCountdown();
             document.getElementById("focusCount").textContent = "0 / 0";
             return;
           }}
@@ -6374,6 +6477,7 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
             cards.forEach(item => item.classList.remove("active"));
             document.getElementById("doneState").classList.add("active");
             document.getElementById("focusCount").textContent = `${{cards.length}} / ${{cards.length}}`;
+            startDashboardCountdown();
           }}
         }}
         document.getElementById("prevBtn").addEventListener("click", () => show(current - 1));
@@ -6433,6 +6537,7 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
                 <div class="focus-controls" data-control-for="{html.escape(item['id'])}">{controls}</div>
                 <template data-edit-template="{html.escape(item['id'])}">{edit_controls}</template>
                 <p class="{reason_class}"><span>{html.escape(review_reason_label(item))}</span>{html.escape(reason)}</p>
+                {review_context_note_html(item)}
               </div>
               <div class="review-context">{evidence_html}<div class="review-meta">{meta_html}</div></div>
             </article>"""
@@ -6476,10 +6581,8 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
       .learning-impact p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.45; }
       .review-summary, .review-reason, .source-snippet, .quality-gates, .evidence-preview, .review-meta { user-select: text; -webkit-user-select: text; }
       .review-action { margin-top: 10px; display: grid; gap: 8px; }
-      .review-why { border:1px solid var(--status-warning-bg); border-radius:6px; background:var(--status-warning-soft-bg); padding:8px 10px; color:var(--fg-2); }
-      .review-why h3 { margin:0 0 5px; color:var(--status-warning); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; }
-      .review-why ul { margin:0; padding-left:17px; display:grid; gap:3px; }
-      .review-why li { margin:0; font-size:12px; line-height:1.4; }
+      .review-context-note { margin:0; color:var(--fg-3); font-size:11.5px; line-height:1.35; }
+      .review-context-note span { margin-right:6px; color:var(--fg-2); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
       .review-context { margin-top: 10px; min-width: 0; }
       .review-meta { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
       blockquote { margin: 8px 0; border-left: 3px solid var(--border-muted); padding: 6px 10px; color: var(--fg-2); background: #fff; font-size: 13px; line-height: 1.45; }
@@ -6574,6 +6677,12 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
             firstPending.scrollIntoView({{ block: "start" }});
           }}
         }});
+        window.addEventListener("pageshow", event => {{
+          const nav = performance.getEntriesByType("navigation")[0];
+          if (event.persisted || (nav && nav.type === "back_forward")) {{
+            location.reload();
+          }}
+        }});
       </script>
     </main></body></html>"""
 
@@ -6643,6 +6752,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin: 0 0 14px; }
     .toolbar-left { display:flex; align-items:center; gap:10px; min-width:0; }
     .toolbar-actions { display:flex; align-items:center; gap:8px; }
+    .dashboard-update-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 14px; border:1px solid var(--status-warning-bg); border-radius:12px; background:var(--status-warning-soft-bg); box-shadow:var(--shadow-small-bottom); padding:11px 13px; }
+    .dashboard-update-banner[hidden] { display:none; }
+    .dashboard-update-banner strong { display:block; color:var(--status-warning); font-size:13px; line-height:1.25; }
+    .dashboard-update-banner span { display:block; margin-top:2px; color:var(--fg-2); font-size:12px; line-height:1.35; }
+    .dashboard-update-button { height:28px; flex:0 0 auto; border:1px solid rgba(124,58,237,.35); border-radius:999px; background:#fff; color:var(--ai-purple); padding:0 11px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }
+    .dashboard-update-button:hover { border-color:var(--ai-purple); background:var(--ai-purple-bg); color:var(--ai-purple-dark); }
     .tab-panel { display:none; }
     .tab-panel.active { display:block; }
     .search { width: 260px; max-width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; color: var(--text); outline: none; background: #fff; }
@@ -6948,6 +7063,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .deliverable-link.missing strong { color:var(--fg-3); }
     .deliverable-link strong { min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-size:12px; color:var(--fg-1); line-height:1.3; }
     .deliverable-link .deliverable-desc { color:var(--fg-3); font-size:11px; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+    .deliverable-blocked { display:inline-flex; align-items:center; width:max-content; max-width:100%; color:var(--fg-3); font-size:11px; line-height:1.25; }
     .deliverable-link .doc-status { width:max-content; max-width:100%; height:18px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:#fff; padding:0 7px; color:var(--fg-2); font-size:10.5px; font-weight:650; white-space:nowrap; }
     .deliverable-link .doc-status.yellow { border-color:var(--status-warning-bg); background:var(--status-warning-bg); color:var(--status-warning); }
     .deliverable-link .doc-status.green { border-color:var(--status-success-bg); background:var(--status-success-bg); color:var(--status-success); }
@@ -7124,6 +7240,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       <main>
         <section class="tab-panel active" id="dashboardPanel">
           <section class="toolbar"><div class="toolbar-left"><input class="search" id="search" type="search" placeholder="Search projects"><div class="toolbar-actions" id="toolbarActions"></div></div><div class="toolbar-status"><button class="manual-refresh" id="refreshButton" type="button" data-label="Refresh dashboard"><svg class="manual-refresh-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z"/></svg><span>Refresh dashboard</span></button><span>Auto every <span id="refreshMinutes">15</span> min</span></div></section>
+          <section class="dashboard-update-banner" id="dashboardUpdateBanner" hidden></section>
           <section id="projects"></section>
         </section>
         <section class="tab-panel" id="learningPanel"></section>
@@ -7139,6 +7256,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     let activeTab = localStorage.getItem("research-os-dashboard-tab") || "dashboard";
     let refreshIntervalSeconds = 900;
     let refreshTimer = null;
+    let promptRefreshTimer = null;
+    let promptRefreshUntil = 0;
     let dashboardRefreshing = false;
     const stageNames = { sources: "Sources", representations: "Representations", evidence: "Evidence", patterns: "Patterns", insights: "Insights", recommendations: "Recommendations", deliverables: "Deliverables" };
     const stageGroups = [
@@ -7167,6 +7286,20 @@ DASHBOARD_HTML = r"""<!doctype html>
       refreshIntervalSeconds = Math.max(30, Math.min(3600, Number(seconds) || 900));
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(refresh, refreshIntervalSeconds * 1000);
+    }
+    function startPromptRefreshWatch() {
+      promptRefreshUntil = Date.now() + 5 * 60 * 1000;
+      setUpdatedText("Watching for prompt changes...");
+      refresh(true);
+      if (promptRefreshTimer) clearInterval(promptRefreshTimer);
+      promptRefreshTimer = setInterval(() => {
+        if (Date.now() > promptRefreshUntil) {
+          clearInterval(promptRefreshTimer);
+          promptRefreshTimer = null;
+          return;
+        }
+        refresh(true);
+      }, 5000);
     }
     function badge(status, text) { return `<span class="badge ${status || "gray"}">${dot(status)}${text}</span>`; }
     function plural(count, singular, pluralValue) {
@@ -7326,22 +7459,26 @@ DASHBOARD_HTML = r"""<!doctype html>
       const open = isOpen(projectId, project.status === "yellow" || project.status === "red");
       const infoOpen = isOpen(infoId, false);
       const sourceStatus = project.project_context.files_waiting ? badge("yellow", `${plural(project.project_context.files_waiting, "source")} waiting`) : badge(project.project_context.files_total ? "green" : "gray", project.project_context.files_total ? "up to date" : "empty");
-      const sourceActions = `<a class="stage-cta" href="${project.project_context.action.href}">Open sources</a>${sourceStatus}${info(project.project_context.action, "prompt")}`;
+      const sourcePrompt = project.project_context.files_waiting ? info(project.project_context.action, "prompt") : "";
+      const sourceActions = `<a class="stage-cta" href="${project.project_context.action.href}">Open sources</a>${sourceStatus}${sourcePrompt}`;
       const backgroundPresent = Boolean(project.project_context.background_present);
       const backgroundAction = project.project_context.background_action || {};
       const backgroundStatus = badge(backgroundPresent ? "green" : "gray", backgroundPresent ? "added" : "not added yet");
       const backgroundSub = backgroundPresent ? "Durable context is available for future research rounds" : "No accepted project background has been added yet";
       const backgroundActions = `<a class="stage-cta" href="${backgroundAction.href || "#"}">${backgroundPresent ? "Open background" : "Add background"}</a>${backgroundStatus}${info(backgroundAction)}`;
       const projectReviewState = project.review.pending_items ? `<a class="stage-cta review" href="${focusHref(project.review.action.href)}">Start these reviews</a>${badge("yellow", `${project.review.pending_items} to review`)}` : `<span class="mini-note">No project reviews</span>`;
+      const projectReviewInfo = project.review.pending_items ? info(project.review.action) : "";
       const projectParts = [
         renderProjectPart("Project sources", projectSourceText(project), sourceActions),
         renderProjectPart("Project background", backgroundSub, backgroundActions),
-        renderProjectPart("Project reviews", "Reusable context decisions for this project", `${projectReviewState}${info(project.review.action)}`),
+        renderProjectPart("Project reviews", "Reusable context decisions for this project", `${projectReviewState}${projectReviewInfo}`),
       ].join("");
       const monitoredRoundCount = project.rounds.filter(round => round.monitored !== false).length;
       const projectMeta = project.last_round ? `${project.rounds.length} round${project.rounds.length === 1 ? "" : "s"} · ${monitoredRoundCount} monitored · last round ${project.last_round}` : "No rounds yet";
       const roundsSub = project.rounds.length ? `${project.rounds.length} round${project.rounds.length === 1 ? "" : "s"} · ${monitoredRoundCount} monitored` : "No research rounds yet";
-      return `<article class="project ${open ? "open" : ""}" data-name="${escapeHtml(project.name.toLowerCase())}"><div class="row"><button class="toggle" data-toggle="${projectId}" aria-label="Toggle project">${open ? "&#9662;" : "&#9656;"}</button><div class="project-icon" aria-hidden="true">${projectEmoji(project)}</div><div class="title"><div class="name">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(projectMeta)}</div></div><div class="badges">${attentionBadges(project.status, projectWaitingTotal(project), projectReviewTotal(project))}${info(newRoundAction(project), "prompt")}</div></div><div class="project-body"><section class="project-info-section ${infoOpen ? "open" : ""}"><div class="project-info-row"><button class="toggle" data-toggle="${infoId}" aria-label="Toggle project info">${infoOpen ? "&#9662;" : "&#9656;"}</button><div><div class="project-info-title">Project info</div><div class="project-info-sub">Sources, background and reusable context reviews</div></div><div class="badges">${sourceStatus}${project.review.pending_items ? badge("yellow", `${project.review.pending_items} to review`) : ""}</div></div><div class="project-stack">${projectParts}</div></section><div class="rounds"><div class="rounds-head"><span></span><div><div class="rounds-title">Research rounds</div><div class="rounds-sub">${escapeHtml(roundsSub)}</div></div><div class="badges">${project.rounds.length ? attentionBadges(project.status, project.rounds.reduce((sum, round) => sum + round.source_files.waiting, 0), project.rounds.reduce((sum, round) => sum + round.review.pending_items, 0)) : ""}</div></div>${project.rounds.map(renderRound).join("") || renderNoRounds(project)}</div></div></article>`;
+      const projectHeaderBadges = open ? "" : attentionBadges(project.status, projectWaitingTotal(project), projectReviewTotal(project));
+      const projectInfoBadges = infoOpen ? "" : `${sourceStatus}${project.review.pending_items ? badge("yellow", `${project.review.pending_items} to review`) : ""}`;
+      return `<article class="project ${open ? "open" : ""}" data-name="${escapeHtml(project.name.toLowerCase())}"><div class="row"><button class="toggle" data-toggle="${projectId}" aria-label="Toggle project">${open ? "&#9662;" : "&#9656;"}</button><div class="project-icon" aria-hidden="true">${projectEmoji(project)}</div><div class="title"><div class="name">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(projectMeta)}</div></div><div class="badges">${projectHeaderBadges}${info(newRoundAction(project), "prompt")}</div></div><div class="project-body"><section class="project-info-section ${infoOpen ? "open" : ""}"><div class="project-info-row"><button class="toggle" data-toggle="${infoId}" aria-label="Toggle project info">${infoOpen ? "&#9662;" : "&#9656;"}</button><div><div class="project-info-title">Project info</div><div class="project-info-sub">Sources, background and reusable context reviews</div></div><div class="badges">${projectInfoBadges}</div></div><div class="project-stack">${projectParts}</div></section><div class="rounds"><div class="rounds-head"><span></span><div><div class="rounds-title">Research rounds</div><div class="rounds-sub">${escapeHtml(roundsSub)}</div></div><div class="badges"></div></div>${project.rounds.map(renderRound).join("") || renderNoRounds(project)}</div></div></article>`;
     }
     function renderRound(round) {
       const roundId = `round:${round.path}`;
@@ -7356,7 +7493,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       const body = monitored
         ? `<div class="round-body">${renderRoundReviewLine(round)}${renderRoundSignalCards(round)}<div class="stages">${renderStageGroups(round)}</div></div>`
         : `<div class="round-body"><div class="monitor-note"><strong>Enable monitoring to work on this round.</strong><br>You can still view existing deliverables below.</div>${renderReadonlyDeliverables(round)}</div>`;
-      return `<section class="round ${open ? "open" : ""} ${monitored ? "" : "round-muted"}"><div class="row">${rowToggle}<div class="title"><div class="name">${escapeHtml(round.name)}</div><div class="meta">${escapeHtml(metaParts.join(" · "))}</div></div><div class="badges">${monitored ? `${lensBadge(round)}${attentionBadges(round.status, round.source_files.waiting, round.review.pending_items)}` : badge("gray", "not monitored")}</div>${toggle}</div>${body}</section>`;
+      const roundHeaderBadges = monitored ? `${lensBadge(round)}${open ? "" : attentionBadges(round.status, round.source_files.waiting, round.review.pending_items)}` : badge("gray", "not monitored");
+      return `<section class="round ${open ? "open" : ""} ${monitored ? "" : "round-muted"}"><div class="row">${rowToggle}<div class="title"><div class="name">${escapeHtml(round.name)}</div><div class="meta">${escapeHtml(metaParts.join(" · "))}</div></div><div class="badges">${roundHeaderBadges}</div>${toggle}</div>${body}</section>`;
     }
     function renderRoundSignalCards(round) {
       const checklist = Array.isArray(round.first_run_checklist) ? round.first_run_checklist : [];
@@ -7395,6 +7533,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       const count = round.review.pending_items;
       const patternIssues = (((round.stages || {}).patterns || {}).gate_issues) || [];
       const staleGate = patternIssues.find(issue => issue.id === "PAT-SYNTHESIS-STALE");
+      if (!count && !staleGate) {
+        return `<div class="round-review-line clear"><div><div class="round-review-title">Round setup</div><div class="round-review-sub">Research lens and round-level settings</div></div><div class="round-review-actions">${renderResearchLensControl(round)}</div></div>`;
+      }
       const title = staleGate ? "Next step" : "Round reviews";
       const subtitle = staleGate ? "New evidence has been processed. Run synthesis to see whether Patterns, Insights and Recommendations should change." : "Decisions before this round can feed deliverables or current understanding";
       const state = count ? `<a class="stage-cta review" href="${focusHref(action.href)}">Start review for ${count} ${count === 1 ? "item" : "items"}</a>` : (staleGate ? `<span class="stage-cta review">Run synthesis next</span>` : "");
@@ -7404,7 +7545,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const stage = round.stages && round.stages.deliverables;
       if (!stage) return "";
       const group = { key: "output", title: "Output", keys: ["deliverables"] };
-      return `<section class="stage-group">${renderPhaseHeader(round, group)}${renderStage("deliverables", stage, false, round.stages)}</section>`;
+      return `<section class="stage-group">${renderPhaseHeader(round, group)}${renderStage("deliverables", stage, false, round.stages, round)}</section>`;
     }
     function renderReadonlyDeliverables(round) {
       const stage = round.stages && round.stages.deliverables;
@@ -7433,70 +7574,108 @@ DASHBOARD_HTML = r"""<!doctype html>
       if (!reviewAction || !reviewAction.href) return "";
       return focusHref(reviewAction.href, key);
     }
+    function stageTotal(stages, key) {
+      return Number(((stages || {})[key] || {}).total || 0);
+    }
+    function stageReview(stages, key) {
+      return Number(((stages || {})[key] || {}).review || 0);
+    }
+    function stageGates(stages, key) {
+      return Number(((stages || {})[key] || {}).gates || 0);
+    }
+    const synthesisStageKeys = ["evidence", "patterns", "insights", "recommendations"];
+    function synthesisStatusBlocked(stages) {
+      return synthesisStageKeys.some(key => {
+        const stage = ((stages || {})[key] || {});
+        const status = stage.status || "gray";
+        return status !== "green" || stageReview(stages, key) > 0 || stageGates(stages, key) > 0;
+      });
+    }
+    function inputWaiting(round) {
+      const stages = round.stages || {};
+      return Number(((stages.sources || {}).waiting) || 0);
+    }
+    function inputTotal(round) {
+      return stageTotal(round.stages || {}, "sources");
+    }
+    function inputIsReady(round) {
+      return inputTotal(round) > 0 && inputWaiting(round) === 0;
+    }
+    function synthesisItemTotal(round) {
+      const stages = round.stages || {};
+      return synthesisStageKeys.reduce((sum, key) => sum + stageTotal(stages, key), 0);
+    }
+    function synthesisReviewTotal(round) {
+      const stages = round.stages || {};
+      return synthesisStageKeys.reduce((sum, key) => sum + stageReview(stages, key), 0);
+    }
+    function synthesisGateTotal(round) {
+      const stages = round.stages || {};
+      return synthesisStageKeys.reduce((sum, key) => sum + stageGates(stages, key), 0);
+    }
+    function synthesisIsReady(round) {
+      return inputIsReady(round) && synthesisItemTotal(round) > 0 && !synthesisStatusBlocked(round.stages || {});
+    }
     function phaseStatus(round, group) {
       const stages = round.stages;
       if (group.key === "input") {
         const waiting = Number(stages.sources.waiting || 0);
+        const total = Number(stages.sources.total || 0);
         return {
-          status: waiting ? "yellow" : "green",
-          label: waiting ? `${plural(waiting, "source")} waiting` : "up to date",
-          action: {
+          status: waiting ? "yellow" : (total ? "green" : "gray"),
+          label: waiting ? `${plural(waiting, "source")} waiting` : (total ? "up to date" : "not started"),
+          action: waiting ? {
             label: "Run input",
             button_label: "Run input",
             copy_label: "run input",
-            instruction: waiting ? "Input has unprocessed source material. Ask Codex to process this round." : "Input is up to date. No source processing is needed right now.",
+            instruction: "Input has unprocessed source material. Ask Codex to process this round.",
             prompt: `Process Input for this Research OS round in Codex/Cowork: ${round.path}. First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings. Read 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules. ${lensInstruction(round)} Do not call APIs, do not run local stubs, and do not use the backend pipeline. If source files are waiting, read the waiting sources and update Research OS documents directly. If a source is researcher-synthesis, treat it as high-weight directional researcher interpretation for Insights, Recommendations and Current Understanding, but do not convert it into standalone participant Evidence unless explicitly requested. Keep review decisions pending in the web UI. After genuine processing, update .pipeline-state.json for processed source checksums and report what changed and what still needs review.`
-          }
+          } : null
         };
       }
       if (group.key === "synthesis") {
-        const reviews = ["evidence", "patterns", "insights", "recommendations"].reduce((sum, key) => sum + Number(stages[key].review || 0), 0);
-        const gates = ["evidence", "patterns", "insights", "recommendations"].reduce((sum, key) => sum + Number(stages[key].gates || 0), 0);
+        const reviews = synthesisStageKeys.reduce((sum, key) => sum + Number(stages[key].review || 0), 0);
+        const gates = synthesisStageKeys.reduce((sum, key) => sum + Number(stages[key].gates || 0), 0);
+        const started = synthesisItemTotal(round) > 0;
+        const readyToStart = inputIsReady(round);
         const gateItems = [];
-        ["evidence", "patterns", "insights", "recommendations"].forEach(key => {
+        synthesisStageKeys.forEach(key => {
           ((stages[key] && stages[key].gate_issues) || []).forEach(issue => gateItems.push({ stage: key, id: issue.id, message: issue.message }));
         });
         const staleGate = gateItems.find(issue => issue.id === "PAT-SYNTHESIS-STALE");
         const gateText = gateSummary(round);
+        const canRun = (!started && readyToStart) || Boolean(staleGate) || (!reviews && gates);
         return {
-          status: (reviews || gates) ? "yellow" : "green",
-          label: staleGate ? "new evidence needs synthesis" : (reviews && gates ? `${reviews} review · ${gates} checks` : (reviews ? `${reviews} to review` : (gates ? `${gates} checks need attention` : "up to date"))),
-          action: {
+          status: !started ? "gray" : ((reviews || gates) ? "yellow" : "green"),
+          label: !started ? "not started" : (staleGate ? "new evidence needs synthesis" : (reviews && gates ? `${reviews} review · ${gates} checks` : (reviews ? `${reviews} to review` : (gates ? `${gates} checks need attention` : "up to date")))),
+          action: canRun ? {
             label: "Run synthesis",
             button_label: "Run synthesis",
             copy_label: "run synthesis",
-            instruction: staleGate ? "New Evidence has been processed and curated, but it has not been carried into Patterns, Insights or Recommendations yet. Run synthesis next before trusting downstream deliverables." : (reviews || gates ? "Continue synthesis after your review batch. Codex applies completed decisions, continues the next synthesis step, and improves quality gaps where the source material supports it." : "Synthesis is up to date. Use this prompt only to check whether anything changed before continuing downstream."),
+            instruction: !started ? "Input is ready. Run synthesis to create or update Evidence, Patterns, Insights and Recommendations, then stop at the next review gate." : (staleGate ? "New Evidence has been processed and curated, but it has not been carried into Patterns, Insights or Recommendations yet. Run synthesis next before trusting downstream deliverables." : "Continue synthesis after your review batch. Codex applies completed decisions and improves quality gaps where the source material supports it."),
             prompt_description: staleGate ? "Codex should incorporate the newly processed Evidence into cross-source synthesis. It should update or add Patterns where supported, then stop at the next review gate so the researcher can review any new or changed Patterns, Insights or Recommendations before output is refreshed." : "Codex applies your completed Evidence, Pattern, Insight or Recommendation review decisions, continues the next appropriate synthesis step, updates Recommendations, and improves quality gaps where the source material supports it. It must not make review decisions for you.",
             quality_gate_path: round.path,
             quality_gates: gateItems,
-            prompt: `Continue synthesis after my reviews for this Research OS round in Codex/Cowork: ${round.path}.\n\nFirst read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.\nRead 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules. If any source is marked researcher-synthesis, treat it as high-weight directional researcher interpretation for Insights, Recommendations and Current Understanding; do not treat it as standalone participant Evidence unless explicitly requested.\n${lensInstruction(round)}\nRead the review decisions for Evidence, Patterns, Insights and Recommendations.\nApply completed review decisions to the Research OS documents.\nContinue the next appropriate synthesis step based on which reviews are complete:\n- first handle AI-performable Evidence cleanup checks, such as splitting over-compressed observations or repairing traceability, without making researcher review decisions\n- after Evidence reviews: update Patterns\n- after Pattern reviews: update Insights\n- after Insight reviews: update Recommendations\n- after Recommendation reviews: prepare downstream output/current understanding or report what still blocks it\n\nMaintain Recommendations as a living synthesis layer. Each Recommendation should include:\n- What we learned\n- What we should do\n- optional options/tradeoff when multiple routes are supported\n- type/labels when useful\n- based on Evidence, Pattern or Insight IDs\n- confidence and validation/open questions where relevant\n\nRecommendation writing rules:\n- Write like a researcher explaining the implication to another human, not like a compressed summary dump.\n- For What we learned, start with one clear sentence. If there are multiple details, put them in 2-4 bullets.\n- For What we should do, start with one clear recommendation sentence. If there are multiple concrete changes, put them in 2-5 bullets.\n- Avoid long paragraphs that combine rationale, examples, and actions in one line.\n\nAlso improve quality gaps where the source material supports it:\ntraceability, weak support, contradicting evidence, assumptions/open questions, unclear "Helps us understand" fields, over-compressed Evidence observations that Codex can safely split or tighten, and over-compressed Patterns/Insights/Recommendations that do not stand alone.\n\nDo not call APIs.\nDo not run local stubs.\nDo not use the backend pipeline.\nDo not make review decisions for me.\nKeep unresolved items pending in the web UI.\n\nCurrent visible checks needing attention:\n${gateText}\n\nReport what changed, what was not changed, and what still needs review.`
-          }
+            prompt: `Continue synthesis after my reviews for this Research OS round in Codex/Cowork: ${round.path}.\n\nFirst read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.\nRead 00-ai-work-files/90-pipeline-settings.yaml and apply source-type rules. If any source is marked researcher-synthesis, treat it as high-weight directional researcher interpretation for Insights, Recommendations and Current Understanding; do not treat it as standalone participant Evidence unless explicitly requested.\n${lensInstruction(round)}\nRead the review decisions for Evidence, Patterns, Insights and Recommendations.\nApply completed review decisions to the Research OS documents.\nContinue the next appropriate synthesis step based on which reviews are complete:\n- first handle AI-performable Evidence cleanup checks, such as splitting over-compressed observations or repairing traceability, without making researcher review decisions\n- after Evidence reviews: update Patterns\n- after Pattern reviews: update Insights\n- after Insight reviews: update Recommendations\n- after Recommendation reviews: prepare downstream output/current understanding or report what still blocks it\n\nMaintain Recommendations as a living synthesis layer. Each Recommendation should include:\n- What we learned\n- What we should do\n- optional options/tradeoff when multiple routes are supported\n- type/labels when useful\n- based on Evidence, Pattern or Insight IDs\n- confidence and validation/open questions where relevant\n\nRecommendation writing rules:\n- Write like a researcher explaining the implication to another human, not like a compressed summary dump.\n- For What we learned, start with one clear sentence. If there are multiple details, put them in 2-4 bullets.\n- For What we should do, start with one clear recommendation sentence. If there are multiple concrete changes, put them in 2-5 bullets.\n- Avoid long paragraphs that combine rationale, examples, and actions in one line.\n\nReview queue writing rules:\n- Proposed change must contain the actual Evidence, Pattern, Insight or Recommendation text the researcher should judge.\n- Do not use Proposed change for meta-review instructions such as "Review whether this should remain..." or "Review whether the wording is precise enough...".\n- Put the reason for review in Review reason, Triggered by, uncertainty, contradiction or quality-gate fields.\n- Phrase the item so a researcher can understand what happened, why it matters and what downstream risk they are deciding on.\n\nAlso improve quality gaps where the source material supports it:\ntraceability, weak support, contradicting evidence, assumptions/open questions, unclear "Helps us understand" fields, over-compressed Evidence observations that Codex can safely split or tighten, and over-compressed Patterns/Insights/Recommendations that do not stand alone.\n\nDo not call APIs.\nDo not run local stubs.\nDo not use the backend pipeline.\nDo not make review decisions for me.\nKeep unresolved items pending in the web UI.\n\nCurrent visible checks needing attention:\n${gateText}\n\nReport what changed, what was not changed, and what still needs review.`
+          } : null
         };
       }
-      const synthesisReviews = Number(round.review.pending_items || 0);
       const deliverableReviews = Number(stages.deliverables.review || 0);
-      const reviews = synthesisReviews + deliverableReviews;
+      const synthesisReviews = Math.max(0, Number((round.review || {}).pending_items || 0) - deliverableReviews);
       const deliverables = Number(stages.deliverables.generated || 0);
       const totalDeliverables = Number(stages.deliverables.total || 0);
       const missingDeliverables = Math.max(totalDeliverables - deliverables, 0);
-      const reviewLabel = synthesisReviews
-        ? `${plural(synthesisReviews, "synthesis item")} to review`
-        : `${plural(deliverableReviews, "deliverable item")} to review`;
-      const outputLabel = reviews ? reviewLabel : (missingDeliverables ? `${plural(missingDeliverables, "deliverable")} to prepare` : (deliverables ? `${plural(deliverables, "deliverable")}` : "not started"));
+      const blockedByInput = !inputIsReady(round);
+      const blockedBySynthesis = !synthesisIsReady(round) || synthesisReviews > 0;
+      const outputLabel = blockedByInput
+        ? "waiting for input"
+        : (blockedBySynthesis
+          ? "deliverables blocked by synthesis"
+          : (deliverableReviews ? `${plural(deliverableReviews, "deliverable item")} to review` : (missingDeliverables ? "choose deliverable below" : (deliverables ? "deliverables ready" : "not started"))));
       return {
-        status: reviews || missingDeliverables ? "yellow" : (deliverables ? "green" : "gray"),
+        status: blockedByInput || blockedBySynthesis ? "gray" : (deliverableReviews || missingDeliverables ? "yellow" : (deliverables ? "green" : "gray")),
         label: outputLabel,
-        action: {
-          label: "Check output",
-          button_label: "Check output",
-          copy_label: "check output",
-          instruction: reviews
-            ? "Output is waiting for review decisions or deliverable notes before any final artefact should be exported or shared."
-            : (missingDeliverables
-              ? "Synthesis is accepted. You can now use Check output to prepare the next reviewable deliverable Markdown."
-              : "All configured deliverables are prepared. Use each deliverable card to review, copy or export the approved artefact."),
-          prompt: `Check Output for this Research OS round in Codex/Cowork: ${round.path}. First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings. ${lensInstruction(round)} Do not call APIs, do not run local stubs, and do not use backend deliverable generation. Use the round's actual deliverables folder from status.json or the filesystem; in the clean folder structure this is usually 02-output-deliverables. If synthesis reviews are still open, or if any active deliverable section is not marked Yes/Looks good without comments, tell me what blocks output. History entries in .deliverable-reviews.json are previous review rounds and should not block output. If active deliverable review notes exist, read .deliverable-reviews.json and apply completed notes directly to the Markdown deliverable. Add a history entry for the review round you processed, but preserve sections marked Looks good with no notes unless you changed their content. Sections whose content changes should be reviewed again; unchanged approved sections should stay ready with only an Edit option in the UI. Deliverables must follow this lifecycle: draft reviewable Markdown source -> user reviews Markdown -> iterate until every active section is Looks good with no notes -> export or finalize the approved artefact. If no research summary Markdown exists yet, create only research-summary.md first. Do not generate the other Markdown deliverables in the same pass. After the research summary is reviewed/accepted with every section Yes/Looks good and no comments, use a second explicit prompt to draft the remaining Markdown deliverables: design actions summary, PowerPoint preparation prompt and stakeholder Slack message. After any Markdown deliverable is fully approved, use its explicit export/finalize prompt to make the final artefact, such as PDF for research summary or design brief.`
-        }
+        action: null
       };
     }
     function renderPhaseHeader(round, group) {
@@ -7507,7 +7686,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     function renderStageGroups(round) {
       const stages = round.stages;
       return stageGroups.map(group => {
-        const rows = group.keys.filter(key => stages[key]).map(key => renderStage(key, stages[key], group.child, stages)).join("");
+        const rows = group.keys.filter(key => stages[key]).map(key => renderStage(key, stages[key], group.child, stages, round)).join("");
         return rows ? `<section class="stage-group">${renderPhaseHeader(round, group)}${rows}</section>` : "";
       }).join("");
     }
@@ -7547,7 +7726,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const segments = progressSegments(stage);
       return `<div class="bar">${segments.map(part => `<div class="fill ${part.status} ${segments.length === 1 ? "only" : ""}" style="width:${part.width}%"></div>`).join("")}</div>`;
     }
-    function renderStage(key, stage, child, stages) {
+    function renderStage(key, stage, child, stages, round) {
       const action = stage.action || {};
       const href = action.href || "#";
       const labelHref = stage.review ? reviewStageHref(stages, key) : href;
@@ -7558,6 +7737,14 @@ DASHBOARD_HTML = r"""<!doctype html>
         : `<a class="${labelClass}" href="${labelHref}">${escapeHtml(label)}</a>`;
       if (key === "deliverables") {
         const items = Array.isArray(stage.items) ? stage.items : [];
+        const summaryItem = items.find(item => item.name === "research-summary.md") || {};
+        const summaryReady = Boolean(summaryItem.exists) && summaryItem.status === "green";
+        const localInputReady = Number(((stages.sources || {}).total) || 0) > 0 && Number(((stages.sources || {}).waiting) || 0) === 0;
+        const localSynthesisTotal = synthesisStageKeys.reduce((sum, name) => sum + Number(((stages[name] || {}).total) || 0), 0);
+        const localDeliverableReviews = Number(((stages.deliverables || {}).review) || 0);
+        const localSynthesisReviews = Math.max(0, Number((((round || {}).review || {}).pending_items) || 0) - localDeliverableReviews);
+        const canPrepareDeliverables = localInputReady && localSynthesisTotal > 0 && !synthesisStatusBlocked(stages) && localSynthesisReviews === 0;
+        const deliverablesBlocked = !canPrepareDeliverables;
         const docs = items.map(item => {
           const status = item.status || (item.exists ? "yellow" : "gray");
           const statusLabel = item.status_label || (item.exists ? "ready for review" : "not generated");
@@ -7566,8 +7753,19 @@ DASHBOARD_HTML = r"""<!doctype html>
           const link = item.href
             ? `<a class="deliverable-link" href="${item.href}">${body}</a>`
             : `<div class="deliverable-link missing" aria-disabled="true">${body}</div>`;
-          const actions = Array.isArray(item.actions) && item.actions.length
-            ? `<div class="deliverable-actions">${item.actions.map(action => {
+          const visibleActions = Array.isArray(item.actions)
+            ? item.actions.filter(action => {
+              if (!action.prompt) return true;
+              if (!canPrepareDeliverables) return false;
+              if (item.name === "research-summary.md") return true;
+              return summaryReady;
+            })
+            : [];
+          const blockedNote = !item.exists
+            ? (deliverablesBlocked ? `<span class="deliverable-blocked">Blocked by synthesis</span>` : (!summaryReady && item.name !== "research-summary.md" ? `<span class="deliverable-blocked">After summary review</span>` : ""))
+            : "";
+          const actions = visibleActions.length
+            ? `<div class="deliverable-actions">${visibleActions.map(action => {
               if (action.prompt) {
                 return info(action, "prompt");
               }
@@ -7579,9 +7777,15 @@ DASHBOARD_HTML = r"""<!doctype html>
               return `<a class="deliverable-action" href="${escapeHtml(actionHref)}"${opensPdf ? " target=\"_blank\" rel=\"noreferrer\" data-no-inline=\"true\"" : ""}>${escapeHtml(action.label || "Open")}</a>`;
             }).join("")}</div>`
             : "";
-          return `<div class="deliverable-doc">${link}${actions}</div>`;
+          return `<div class="deliverable-doc">${link}${blockedNote}${actions}</div>`;
         }).join("");
-        return `<div class="stage deliverables-stage ${child ? "child" : ""}"><div class="deliverables-head"><div class="deliverables-title">${dot(stage.status)} ${escapeHtml(stageNames[key] || key)}</div><div class="deliverables-meta"><span>${escapeHtml(label)}</span></div></div><div class="deliverable-links">${docs}</div></div>`;
+        const stageDot = deliverablesBlocked ? "gray" : stage.status;
+        const deliverableReviewCount = Number(stage.review || 0);
+        const generatedCount = Number(stage.generated || 0);
+        const stageLabel = deliverablesBlocked
+          ? "blocked by synthesis"
+          : (deliverableReviewCount ? `${plural(deliverableReviewCount, "deliverable item")} to review` : (generatedCount ? "deliverables ready" : "choose deliverable below"));
+        return `<div class="stage deliverables-stage ${child ? "child" : ""}"><div class="deliverables-head"><div class="deliverables-title">${dot(stageDot)} ${escapeHtml(stageNames[key] || key)}</div><div class="deliverables-meta"><span>${escapeHtml(stageLabel)}</span></div></div><div class="deliverable-links">${docs}</div></div>`;
       }
       return `<div class="stage ${child ? "child" : ""}"><a class="stage-link" href="${href}"><div class="stage-name">${dot(stage.status)} ${escapeHtml(stageNames[key] || key)}</div>${renderProgress(stage)}</a><div class="stage-label">${labelElement}</div>${info(stage.action)}</div>`;
     }
@@ -7810,17 +8014,17 @@ DASHBOARD_HTML = r"""<!doctype html>
                 <div class="pipeline-flow-number">6</div>
                 <div class="pipeline-flow-title"><strong>Synthesize and review</strong><span>Repeat stage by stage</span></div>
                 <div class="pipeline-flow-detail">
-                  <p>Run synthesis to create patterns, insights and recommendations. Review yellow items, add notes, then rerun the prompt when changes are needed.</p>
-                  <div class="pipeline-flow-tags"><span class="pipeline-tag yellow">review queue</span><span class="pipeline-tag purple">Run synthesis</span><span class="pipeline-tag green">accepted knowledge</span></div>
+                  <p>Run synthesis to create patterns, insights and recommendations. After every review round, run synthesis again so the AI applies your decisions, even when you accepted everything.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag yellow">review queue</span><span class="pipeline-tag purple">Run synthesis after review</span><span class="pipeline-tag green">accepted knowledge</span></div>
                 </div>
-                <div class="pipeline-flow-action review">Review</div>
+                <div class="pipeline-flow-action review">Review then synthesize</div>
               </div>
               <div class="pipeline-flow-row output">
                 <div class="pipeline-flow-number">7</div>
                 <div class="pipeline-flow-title"><strong>Create deliverables</strong><span>Output from accepted knowledge</span></div>
                 <div class="pipeline-flow-detail">
-                  <p>Prepare a summary, design brief, deck prompt, Slack message or post-it notes. Review the draft first, then finalize or export.</p>
-                  <div class="pipeline-flow-tags"><span class="pipeline-tag green">02-output-deliverables</span><span class="pipeline-tag yellow">review Markdown</span><span class="pipeline-tag purple">final artifact</span></div>
+                  <p>Output stays blocked until synthesis has processed the last review round. Start with the Research summary, review that Markdown, then prepare any other deliverables.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag green">02-output-deliverables</span><span class="pipeline-tag yellow">Research summary first</span><span class="pipeline-tag purple">final artifact</span></div>
                 </div>
                 <div class="pipeline-flow-action output">Create output</div>
               </div>
@@ -7830,12 +8034,12 @@ DASHBOARD_HTML = r"""<!doctype html>
           <section class="onboarding-card" data-onboarding-section="folders">
             <h3>How the workspace is organized</h3>
             <div class="onboarding-folder-card">
-              <div class="onboarding-folder-row"><span class="dot blue"></span><strong>Project</strong><span>long-running topic</span></div>
-              <div class="onboarding-folder-row"><span class="dot green"></span><strong>Round</strong><span>one study or cycle</span></div>
-              <div class="onboarding-folder-row"><span class="dot yellow"></span><strong>Input</strong><span>source material</span></div>
-              <div class="onboarding-folder-row"><span class="dot gray"></span><strong>Output</strong><span>deliverables</span></div>
+              <div class="onboarding-folder-row"><span class="dot gray"></span><strong>00-ai-work-files</strong><span>AI notes, synthesis, review queues and run logs</span></div>
+              <div class="onboarding-folder-row"><span class="dot blue"></span><strong>01-input-source-files</strong><span>source material you add</span></div>
+              <div class="onboarding-folder-row"><span class="dot green"></span><strong>02-output-deliverables</strong><span>reviewed Markdown and final artifacts</span></div>
+              <div class="onboarding-folder-row"><span class="dot yellow"></span><strong>02-rounds</strong><span>project rounds live here</span></div>
             </div>
-            <p>Projects are long-running product areas or topics. Rounds are individual studies, interview batches, evaluations or synthesis cycles inside a project.</p>
+            <p>Projects are long-running product areas or topics. Each project has input source files, rounds and AI work files. Each round uses the same clean pattern: AI work files, input source files and output deliverables.</p>
           </section>
           <section class="onboarding-card" data-onboarding-section="folders">
             <h3>What you can put in input folders</h3>
@@ -7883,7 +8087,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li><strong>Looks good</strong> or <strong>Yes</strong> means it can feed the next stage.</li>
               <li><strong>Needs changes</strong> sends it back for another AI revision.</li>
               <li><strong>No</strong> or <strong>Do not use</strong> keeps it out of the accepted research story.</li>
-              <li>You keep iterating until the active review items are accepted.</li>
+              <li>After the queue is empty, run synthesis again. This applies your review decisions and unlocks the next stage.</li>
             </ol>
           </section>
           <section class="onboarding-card" data-onboarding-section="reviews">
@@ -7895,10 +8099,11 @@ DASHBOARD_HTML = r"""<!doctype html>
                 <span class="flow-step purple">final output</span>
               </div>
             </div>
-            <p>Deliverables are generated from accepted research knowledge, not straight from raw sources. Research OS first prepares a reviewable Markdown version, then you review and iterate before creating the final artifact.</p>
+            <p>Deliverables are generated from accepted research knowledge, not straight from raw sources. Output remains blocked until synthesis has applied the latest review decisions. Research OS first prepares a reviewable Markdown version, then you review and iterate before creating the final artifact.</p>
             <ol>
-              <li>Evidence, Patterns, Insights and Recommendations should be accepted or have no blocking reviews.</li>
-              <li>The AI drafts or updates the Markdown deliverable for review.</li>
+              <li>Evidence, Patterns, Insights and Recommendations should be accepted and processed by a final synthesis run.</li>
+              <li>Start by preparing the Research summary Markdown.</li>
+              <li>After the summary is reviewed, prepare the other deliverables you need.</li>
               <li>You review each active section and keep iterating until every changed section looks good.</li>
               <li>Only then create the final output, such as a PDF, copy-ready message or deck preparation prompt.</li>
             </ol>
@@ -7917,7 +8122,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Click a purple AI button to copy the right prompt.</li>
               <li>Paste it into Codex, Claude or another AI tool that can access your <code>UX Research</code> folder.</li>
               <li>The AI updates local Research OS files and reports what changed.</li>
-              <li>Refresh the dashboard, then review anything marked yellow.</li>
+              <li>The dashboard refreshes after prompt activity. Review anything marked yellow, then run the next prompted step.</li>
             </ol>
           </section>
           <section class="onboarding-card" data-onboarding-section="ai">
@@ -7955,6 +8160,15 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Open Research OS in Safari.</li>
               <li>Use <strong>File</strong> > <strong>Add to Dock</strong>.</li>
               <li>Name it Research OS and confirm.</li>
+            </ol>
+          </section>
+          <section class="onboarding-card" data-onboarding-section="setup">
+            <h3>Settings and updates</h3>
+            <p>Use Settings for the few things that should be local to your machine: project folder, backup destination, dashboard refresh interval and the default research lens for new rounds.</p>
+            <ol>
+              <li>If Research OS finds a newer GitHub version, the dashboard shows <strong>Update available</strong>.</li>
+              <li>Click <strong>Update prompt</strong> to open Settings and copy the update command.</li>
+              <li>Your <code>Projects</code> folder stays separate from the Research OS code update.</li>
             </ol>
           </section>
           <section class="onboarding-card" data-onboarding-section="setup">
@@ -8183,9 +8397,27 @@ DASHBOARD_HTML = r"""<!doctype html>
       const hasUpdate = Boolean(update && update.update_available);
       button.hidden = !hasUpdate;
       if (hasUpdate) {
-        button.textContent = "New version available";
+        button.textContent = "Update available";
         button.title = `Current: ${(update && update.current_version) || "unknown"} · GitHub: ${(update && update.latest_version) || "unknown"}`;
       }
+    }
+    function openUpdateSettings() {
+      setActiveTab("settings");
+      document.querySelector(`[data-settings-tab="general"]`)?.click();
+      setTimeout(() => document.querySelector(".update-card")?.scrollIntoView({ block: "start" }), 50);
+    }
+    function renderDashboardUpdateBanner(update) {
+      const banner = document.getElementById("dashboardUpdateBanner");
+      if (!banner) return;
+      const hasUpdate = Boolean(update && update.update_available);
+      banner.hidden = !hasUpdate;
+      if (!hasUpdate) {
+        banner.innerHTML = "";
+        return;
+      }
+      const latest = (update && update.latest_version) || "GitHub";
+      banner.innerHTML = `<div><strong>Update available</strong><span>A newer Research OS version is on GitHub: ${escapeHtml(latest)}.</span></div><button class="dashboard-update-button" type="button" id="dashboardUpdateButton">Update prompt</button>`;
+      document.getElementById("dashboardUpdateButton")?.addEventListener("click", openUpdateSettings);
     }
     async function refreshBackupStatus() {
       try {
@@ -8211,7 +8443,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.getElementById("refreshMinutes").textContent = Math.max(1, Math.round(payload.refresh_seconds / 60));
       scheduleDashboardRefresh(payload.refresh_seconds);
       setUpdatedText(`Updated ${new Date(payload.generated_at).toLocaleTimeString()}`);
-      renderVersionStatus(payload.update_status || (payload.settings && payload.settings.update_status) || {});
+      const update = payload.update_status || (payload.settings && payload.settings.update_status) || {};
+      renderVersionStatus(update);
+      renderDashboardUpdateBanner(update);
       document.getElementById("toolbarActions").innerHTML = info(newProjectAction(), "prompt");
       const q = document.getElementById("search").value.trim().toLowerCase();
       const projects = payload.projects.filter(project => !q || project.name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q));
@@ -8326,6 +8560,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         closeTips();
         const copied = await copyPromptText(prompt);
         showToast(copied ? `Copied '${label}' prompt` : "Could not copy prompt");
+        if (copied) startPromptRefreshWatch();
 	      }));
 	      document.querySelectorAll("[data-copy-file]").forEach(button => button.addEventListener("click", async event => {
 	        event.preventDefault();
@@ -8492,8 +8727,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     document.getElementById("backupButton").addEventListener("click", startBackup);
     document.getElementById("versionButton").addEventListener("click", () => {
-      setActiveTab("settings");
-      setTimeout(() => document.querySelector(".update-card")?.scrollIntoView({ block: "start" }), 50);
+      openUpdateSettings();
     });
     document.querySelectorAll(".rail-tab").forEach(button => button.addEventListener("click", () => setActiveTab(button.dataset.tab)));
     document.addEventListener("click", event => {
@@ -8554,6 +8788,13 @@ DASHBOARD_HTML = r"""<!doctype html>
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         refresh();
+        refreshBackupStatus();
+      }
+    });
+    window.addEventListener("pageshow", event => {
+      const nav = performance.getEntriesByType("navigation")[0];
+      if (event.persisted || (nav && nav.type === "back_forward")) {
+        refresh(true);
         refreshBackupStatus();
       }
     });

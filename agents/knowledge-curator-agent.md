@@ -25,6 +25,8 @@ Prepare governed Change Proposals and Review Items that allow Current Understand
 - Bypass researcher approval.
 - Remove uncertainty or rejected proposals from history.
 - Flatten a Recommendation into vague advice without the underlying learning.
+- Put AI process language in `Proposed change`.
+- Ask the researcher to review a meta-instruction instead of the concrete knowledge item.
 
 ## Required Output Format
 Use Markdown with structured fields:
@@ -47,6 +49,13 @@ What we learned: ...
 
 What we should do: ...
 ```
+
+For all other Review Items, `Proposed change` must contain the actual Evidence,
+Pattern, Insight or context statement the researcher should judge. Do not write
+meta-review wording such as "Review whether this should remain as Evidence",
+"Review whether this should be reframed", or "Review whether the wording is
+precise enough" as the proposal. Put that reason in `Review reason`, `Triggered by`,
+uncertainty, contradiction or quality-gate fields instead.
 
 `Helps us understand` must be one plain-language sentence that answers the UI prompt
 "What this helps us understand". It should describe the meaning, implication or reusable

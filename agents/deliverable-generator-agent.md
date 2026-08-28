@@ -38,11 +38,16 @@ Use Markdown with title, request metadata, scope, source knowledge references an
 
 Use a separate export/finalize pass for the final artefact:
 
-- `research-summary.md` -> `pdf-deliverables/research-summary.pdf`
-- `design-actions-summary.md` -> `pdf-deliverables/design-brief.pdf`
+- `research-summary.md` -> versioned PDF in `pdf-deliverables/`
+- `design-actions-summary.md` -> versioned PDF in `pdf-deliverables/`
 - `powerpoint-preparation-prompt.md` -> approved copyable deck prompt
 - `stakeholder-slack-message.md` -> approved ready-to-post Slack message
 - `post-it-notes.md` -> approved Figma/FigJam copyable notes
+
+Use clear versioned file names for PDF deliverables and never overwrite older exports:
+
+- `UXR - Research Summary: [Project name]: [Round name] - v[Version].pdf`
+- `UXR - Design Brief: [Project name]: [Round name] - v[Version].pdf`
 
 For shareable PDF exports, use the configured company-branded report style rather than a generic PDF layout:
 

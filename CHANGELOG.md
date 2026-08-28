@@ -8,6 +8,19 @@ Research OS uses small version numbers while it is still early:
 - `v0.2.0`, `v0.3.0`, etc. for visible new features.
 - `v1.0.0` only when Research OS is stable enough for everyday use.
 
+## v0.1.8 - Review and PDF export polish
+
+Improved review clarity and PDF export handling.
+
+What changed:
+
+- Review analytics now use expanded review items, including saved decisions.
+- Changed review items can reset stale decisions so they are reviewed again.
+- Review pages explain why an item needs review.
+- PDF exports use clear versioned file names and avoid overwriting older PDFs.
+- Deliverable actions link to the latest exported PDF when one exists.
+- Polished review/export buttons and changed-item styling.
+
 ## v0.1.7 - Dashboard signals and settings tabs
 
 Improved the dashboard with clearer round-level signals and a more organized

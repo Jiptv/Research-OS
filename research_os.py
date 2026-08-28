@@ -2119,18 +2119,15 @@ def recent_runs(state: dict, limit: int = 5) -> list[dict]:
 
 
 def review_analytics(review_dir: Path, deliverables_dir: Path | None = None) -> dict:
-    items = parse_markdown_review_items(review_dir)
-    decisions = load_review_decisions(review_dir)
+    items = expanded_review_items(review_dir)
     counts = {"pending": 0, "approved": 0, "needs_changes": 0, "rejected": 0, "with_notes": 0}
     by_stage: dict[str, dict[str, int]] = {}
     for item in items:
         stage = review_pipeline_stage(item)
         by_stage.setdefault(stage, {"total": 0, "pending": 0, "approved": 0, "needs_changes": 0, "rejected": 0})
         by_stage[stage]["total"] += 1
-        stored = decisions.get(item.get("id", ""))
-        stored = stored if isinstance(stored, dict) else {}
-        decision = str(stored.get("decision") or item.get("decision") or "").strip().lower()
-        notes = str(stored.get("notes") or item.get("notes") or "").strip()
+        decision = str(item.get("decision") or "").strip().lower()
+        notes = str(item.get("notes") or "").strip()
         if notes:
             counts["with_notes"] += 1
         if decision == "approve":
@@ -2339,6 +2336,8 @@ def parse_markdown_review_items(path: Path) -> list[dict]:
                     "researcher": markdown_field(block, "Researcher"),
                     "date": markdown_field(block, "Date"),
                     "notes": markdown_field(block, "Notes"),
+                    "proposed_by": markdown_field(block, "Proposed by"),
+                    "triggered_by": markdown_field(block, "Triggered by"),
                     "proposed_change": markdown_field(block, "Proposed change", "Statement", "Observation", "Summary"),
                     "example": markdown_field(block, "Example"),
                     "future_analysis_change": markdown_field(block, "What will change for future analysis"),
@@ -2402,6 +2401,18 @@ def attach_review_change_metadata(items: list[dict], review_path: Path, decision
         if changed_fields:
             item["reviewed_snapshot"] = snapshot
             item["changed_fields"] = changed_fields
+            if item.get("decision"):
+                item["superseded_decision"] = {
+                    "decision": item.get("decision", ""),
+                    "researcher": item.get("researcher", ""),
+                    "date": item.get("date", ""),
+                    "notes": item.get("notes", ""),
+                    "reason": "Reviewable content changed since this decision was made.",
+                }
+                item["decision"] = ""
+                item["researcher"] = ""
+                item["date"] = ""
+                item["notes"] = ""
     return items
 
 
@@ -4089,6 +4100,77 @@ def read_title(path: Path, fallback: str) -> str:
     return title_from_slug(fallback)
 
 
+def round_project_dir(round_dir: Path) -> Path | None:
+    for parent in round_dir.parents:
+        if project_file(parent, "overview").exists():
+            return parent
+    return None
+
+
+def pdf_filename_part(value: str) -> str:
+    clean = re.sub(r"[\\/\n\r\t]+", " ", value).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    return clean or "Untitled"
+
+
+def deliverable_pdf_base_name(deliverables_dir: Path, deliverable_type: str, fallback_title: str) -> str:
+    round_dir = deliverables_dir.parent
+    project_dir = round_project_dir(round_dir)
+    project_name = read_title(project_file(project_dir, "overview"), project_dir.name) if project_dir else "Project"
+    round_name = read_title(round_file(round_dir, "overview"), round_dir.name)
+    deliverable_labels = {
+        "research-summary": "Research Summary",
+        "design-actions-summary": "Design Brief",
+    }
+    deliverable_label = deliverable_labels.get(deliverable_type, fallback_title)
+    return "UXR - {deliverable}: {project}: {round}".format(
+        deliverable=pdf_filename_part(deliverable_label),
+        project=pdf_filename_part(project_name),
+        round=pdf_filename_part(round_name),
+    )
+
+
+def legacy_pdf_path(deliverables_dir: Path, deliverable_type: str) -> Path | None:
+    legacy = {
+        "research-summary": deliverables_dir / "pdf-deliverables" / "research-summary.pdf",
+        "design-actions-summary": deliverables_dir / "pdf-deliverables" / "design-brief.pdf",
+    }.get(deliverable_type)
+    return legacy
+
+
+def versioned_pdf_paths(deliverables_dir: Path, deliverable_type: str, fallback_title: str) -> list[tuple[int, Path]]:
+    pdf_dir = deliverables_dir / "pdf-deliverables"
+    base = deliverable_pdf_base_name(deliverables_dir, deliverable_type, fallback_title)
+    matches: list[tuple[int, Path]] = []
+    if not pdf_dir.exists():
+        return matches
+    pattern = re.compile(rf"^{re.escape(base)} - v(\d+)\.pdf$", flags=re.IGNORECASE)
+    for candidate in pdf_dir.glob("*.pdf"):
+        match = pattern.match(candidate.name)
+        if match:
+            matches.append((int(match.group(1)), candidate))
+    return sorted(matches, key=lambda item: item[0])
+
+
+def next_pdf_export_path(deliverables_dir: Path, deliverable_type: str, fallback_title: str) -> Path:
+    pdf_dir = deliverables_dir / "pdf-deliverables"
+    versions = versioned_pdf_paths(deliverables_dir, deliverable_type, fallback_title)
+    legacy_exists = bool((legacy_pdf_path(deliverables_dir, deliverable_type) or Path()).exists())
+    latest_version = versions[-1][0] if versions else (1 if legacy_exists else 0)
+    base = deliverable_pdf_base_name(deliverables_dir, deliverable_type, fallback_title)
+    return pdf_dir / f"{base} - v{latest_version + 1}.pdf"
+
+
+def latest_pdf_export_path(deliverables_dir: Path, deliverable_type: str, fallback_title: str) -> Path | None:
+    versions = versioned_pdf_paths(deliverables_dir, deliverable_type, fallback_title)
+    if versions:
+        return versions[-1][1]
+    legacy = legacy_pdf_path(deliverables_dir, deliverable_type)
+    if legacy and legacy.exists():
+        return legacy
+    return None
+
+
 def dashboard_file_link(path: Path) -> str:
     return "/file?path=" + urllib.parse.quote(rel(path))
 
@@ -5207,8 +5289,8 @@ def deliverable_export_prompt(deliverables_dir: Path, deliverable_type: str, fal
     round_dir = deliverables_dir.parent
     source = deliverables_dir / f"{deliverable_type}.md"
     export_map = {
-        "research-summary": ("PDF", deliverables_dir / "pdf-deliverables" / "research-summary.pdf"),
-        "design-actions-summary": ("PDF", deliverables_dir / "pdf-deliverables" / "design-brief.pdf"),
+        "research-summary": ("PDF", next_pdf_export_path(deliverables_dir, deliverable_type, fallback_title)),
+        "design-actions-summary": ("PDF", next_pdf_export_path(deliverables_dir, deliverable_type, fallback_title)),
         "powerpoint-preparation-prompt": ("final copyable deck prompt", source),
         "stakeholder-slack-message": ("final ready-to-post Slack message", source),
         "post-it-notes": ("final Figma/FigJam copyable notes", source),
@@ -5228,7 +5310,7 @@ Output file: {rel(output)}
 First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings.
 Before exporting, read {rel(deliverable_review_path(source))} and confirm every active section for {source.name} is marked Looks good with no notes/comments. History entries are previous review rounds and should not block export.
 If any active section is not approved, has notes/comments, or is marked changed, report what blocks PDF generation.
-If ready, create a polished PDF at exactly the output file above.
+If ready, create a polished PDF at exactly the output file above. Do not overwrite earlier PDFs. Research OS uses this naming pattern for PDF deliverables: `UXR - [Deliverable type]: [Project name]: [Round name] - v[Version].pdf`.
 Preserve the approved Markdown wording exactly: do not shorten, rewrite, merge or rename titles, bullets, numbered items or section content for layout reasons. Only change visual formatting in the PDF export.
 Use the configured company-branded report style for Research OS PDF deliverables:
 - Use local branding assets from Research OS/branding/ when present, especially company-logo.png and company-footer.png.
@@ -5309,7 +5391,7 @@ def deliverable_dashboard_items(deliverables_dir: Path) -> list[dict]:
         if deliverable_type in {"research-summary", "design-actions-summary"}:
             copy_stem = copy_stems.get(deliverable_type, deliverable_type)
             copy_html = deliverables_dir / "open-copy" / f"{copy_stem}.html"
-            copy_pdf = deliverables_dir / "pdf-deliverables" / f"{copy_stem}.pdf"
+            copy_pdf = latest_pdf_export_path(deliverables_dir, deliverable_type, fallback_title)
             if file_path.exists():
                 actions.append(
                     {
@@ -5325,7 +5407,7 @@ def deliverable_dashboard_items(deliverables_dir: Path) -> list[dict]:
                         "href": dashboard_file_link(copy_html) + "&mode=focus",
                     }
                 )
-            if copy_pdf.exists():
+            if copy_pdf and copy_pdf.exists():
                 actions.append(
                     {
                         "label": "PDF",
@@ -5476,13 +5558,15 @@ After updating, report exactly which sections changed and confirm the deliverabl
       .deliverable-top h1 { margin:0 0 6px; }
       .iteration-badge { display:inline-flex; align-items:center; min-height:24px; border:1px solid var(--border-muted); border-radius:999px; padding:0 9px; background:#fff; color:var(--fg-2); font-size:12px; font-weight:700; }
       .muted { color:var(--fg-3); font-size:12px; }
-      .copy-prompt { border:1px solid var(--border-muted); border-radius:5px; background:#fff; color:var(--fg-2); font:inherit; font-size:12px; font-weight:700; padding:7px 10px; cursor:pointer; }
+      .copy-prompt { min-height:32px; display:inline-flex; align-items:center; justify-content:center; gap:7px; border:1px solid rgba(124,58,237,.35); border-radius:999px; background:#fff; color:var(--ai-purple); font:inherit; font-size:12px; font-weight:800; padding:0 12px; cursor:pointer; white-space:nowrap; }
+      .copy-prompt:hover { border-color:var(--ai-purple); background:var(--ai-purple-bg); color:var(--ai-purple-dark); }
+      .copy-prompt .sparkle { width:14px; height:14px; display:block; flex:0 0 auto; }
       .deliverable-grid { display:grid; gap:10px; }
       .deliverable-section { border:1px solid var(--line); border-radius:8px; background:var(--surface-subtle); padding:13px; }
       .deliverable-section-head { display:flex; gap:9px; align-items:center; color:var(--fg-2); font-size:12px; margin-bottom:8px; }
       .deliverable-section-head span { font-weight:800; color:var(--fg-3); }
       .deliverable-section-head strong { color:var(--fg-1); }
-      .changed-badge { margin-left:auto; display:inline-flex; align-items:center; min-height:22px; border:1px solid rgba(124,58,237,.35); border-radius:999px; background:var(--ai-purple-bg); color:var(--blue); padding:0 8px; font-size:11px; font-weight:750; }
+      .changed-badge { margin-left:auto; display:inline-flex; align-items:center; min-height:22px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-soft-bg); color:var(--status-warning); padding:0 8px; font-size:11px; font-weight:750; }
       .deliverable-content { background:#fff; border:1px solid var(--line); border-radius:6px; padding:10px 12px; line-height:1.5; }
       .deliverable-content h2, .deliverable-content h3, .deliverable-content h4 { margin:12px 0 6px; }
       .deliverable-content p { margin:7px 0; }
@@ -5515,7 +5599,10 @@ After updating, report exactly which sections changed and confirm the deliverabl
         <a class="deliverable-back" href="/dashboard">← Dashboard</a>
         <div><h1>{title}</h1><div class="muted">Review notes are stored in {notes_path}</div></div>
         <div class="iteration-badge">Review iteration {iteration}</div>
-        <button class="copy-prompt" type="button" data-prompt="{html.escape(revise_prompt)}">Copy revise prompt</button>
+        <button class="copy-prompt" type="button" data-prompt="{html.escape(revise_prompt)}">
+          <svg class="sparkle" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2l1.45 5.05L18.5 8.5l-5.05 1.45L12 15l-1.45-5.05L5.5 8.5l5.05-1.45L12 2zM5.5 13l.85 2.9 2.9.85-2.9.85L5.5 20.5l-.85-2.9-2.9-.85 2.9-.85L5.5 13zM18 14l.65 2.15 2.15.65-2.15.65L18 19.6l-.65-2.15-2.15-.65 2.15-.65L18 14z"/></svg>
+          <span>Copy revise prompt</span>
+        </button>
       </header>
       <section class="deliverable-grid">{"".join(review_cards)}</section>
       <details class="raw"><summary>Raw Markdown</summary><pre>{html.escape(text)}</pre></details>
@@ -5817,6 +5904,35 @@ def review_proposal_html(item: dict, target: Path) -> str:
     return f'<div class="review-summary{changed_class}"><span>Proposal</span>{changed_badge}<p>{html.escape(summary)}</p></div>{learning_context}'
 
 
+def review_why_html(item: dict) -> str:
+    parts: list[str] = []
+    affected = (item.get("affected_knowledge") or "").strip()
+    triggered = (item.get("triggered_by") or "").strip()
+    superseded = item.get("superseded_decision")
+    if isinstance(superseded, dict):
+        decision_date = superseded.get("date", "")
+        old_decision = superseded.get("decision", "previous decision")
+        prefix = f"Previously {old_decision.lower()}"
+        if decision_date:
+            prefix += f" on {decision_date}"
+        parts.append(f"{prefix}; this item changed after that review.")
+    elif affected:
+        parts.append(f"This is not necessarily a brand-new item. It is a changed version of {affected}.")
+    elif item.get("changed_fields"):
+        parts.append("This item changed since its last review, so the previous review no longer fully covers it.")
+    if triggered:
+        parts.append(f"Why now: {triggered}.")
+    if affected:
+        parts.append(f"What to check: whether the updated {affected} framing is still right enough to use downstream.")
+    if not parts:
+        return ""
+    rows = "".join(f"<li>{html.escape(part)}</li>" for part in parts)
+    return f"""<section class="review-why">
+      <h3>Why review this?</h3>
+      <ul>{rows}</ul>
+    </section>"""
+
+
 def review_item_context(item: dict, target: Path) -> tuple[str, str, str, str, str, str]:
     supporting_reference = item.get("supporting_evidence") or item.get("source_reference", "")
     supporting = review_reference_link(supporting_reference, target)
@@ -5844,11 +5960,12 @@ def review_item_context(item: dict, target: Path) -> tuple[str, str, str, str, s
     gates = review_quality_gate_html(item)
     meta_html = f'<dl>{"".join(meta_rows)}</dl>'
     evidence_html = f"{preview or snippet}{gates}"
+    why_html = review_why_html(item)
     return (
         review_question(item),
         review_explanation(item),
         review_choice_hint(item),
-        review_proposal_html(item, target),
+        f"{why_html}{review_proposal_html(item, target)}",
         evidence_html,
         meta_html,
     )
@@ -6082,7 +6199,7 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
       .review-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       .review-head span, .review-head em { color: var(--fg-2); font-size: 12px; font-style: normal; }
       .gate-badge { display: inline-flex; align-items: center; min-height: 18px; border: 1px solid var(--status-warning-bg); border-radius: 999px; background: var(--status-warning-soft-bg); color: var(--status-warning); padding: 0 7px; font-size: 11px; font-weight: 700; }
-      .review-changed-badge { display:inline-flex; align-items:center; min-height:18px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-bg); color:var(--status-warning); padding:0 7px; font-size:11px; font-weight:750; }
+      .review-changed-badge { display:inline-flex; align-items:center; min-height:18px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-soft-bg); color:var(--status-warning); padding:0 7px; font-size:11px; font-weight:750; }
       h2 { margin: 8px 0 6px; font-size: 22px; line-height: 1.2; color: var(--fg-1); }
       .review-explanation { color: var(--fg-2); font-size: 13px; margin: 0 0 12px; }
       .review-pipeline { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 0; overflow: visible; margin: 8px 0 12px; padding: 1px 0 3px; }
@@ -6123,8 +6240,14 @@ def dashboard_review_focus_page(target: Path, title: str, text: str, base_style:
       .transcript-line time { color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; }
       .transcript-line p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.4; }
       .review-action { display: grid; gap: 12px; min-width: 0; }
+      .review-why { border:1px solid var(--status-warning-bg); border-radius:7px; background:var(--status-warning-soft-bg); padding:10px 12px; color:var(--fg-2); }
+      .review-why h3 { margin:0 0 6px; color:var(--status-warning); font-size:11px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; }
+      .review-why ul { margin:0; padding-left:18px; display:grid; gap:4px; }
+      .review-why li { margin:0; font-size:13px; line-height:1.4; }
       .review-summary { width: 100%; min-width: 0; overflow-wrap: anywhere; font-size: 16px; color: var(--fg-1); background: var(--ai-purple-bg); border-left: 3px solid var(--ai-purple); border-radius: 5px; padding: 12px 14px; margin: 0; }
-      .changed-review-field { background:var(--changed-bg) !important; box-shadow:-4px 0 0 var(--changed-bar); }
+      .changed-review-field { box-shadow:none; }
+      .review-summary.changed-review-field { background:var(--ai-purple-bg) !important; }
+      .review-reason.changed-review-field { background:transparent !important; }
       .review-summary span { display: block; margin-bottom: 5px; color: var(--fg-2); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
       .review-summary .review-changed-badge { margin:0 0 7px; width:max-content; }
       .review-summary p { margin: 0; line-height: 1.42; }
@@ -6320,7 +6443,7 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
       .review-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       .review-head span, .review-head em { color: var(--fg-2); font-size: 12px; font-style: normal; }
       .gate-badge { display: inline-flex; align-items: center; min-height: 17px; border: 1px solid var(--status-warning-bg); border-radius: 999px; background: var(--status-warning-soft-bg); color: var(--status-warning); padding: 0 7px; font-size: 10px; font-weight: 700; }
-      .review-changed-badge { display:inline-flex; align-items:center; min-height:17px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-bg); color:var(--status-warning); padding:0 7px; font-size:10px; font-weight:750; }
+      .review-changed-badge { display:inline-flex; align-items:center; min-height:17px; border:1px solid var(--status-warning-bg); border-radius:999px; background:var(--status-warning-soft-bg); color:var(--status-warning); padding:0 7px; font-size:10px; font-weight:750; }
       .review-card h2 { margin: 6px 0; font-size: 17px; line-height: 1.2; font-weight: 650; color: var(--fg-1); }
       .review-card p { line-height: 1.45; }
       .review-explanation { color: var(--fg-2); font-size: 12px; margin: 0 0 7px; }
@@ -6333,7 +6456,9 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
       .review-step.active { color: #2f3847; }
       .review-step.active::before { background: var(--blue); box-shadow: 0 0 0 3px rgba(61,116,255,.16); }
       .review-summary { width: 100%; min-width: 0; overflow-wrap: anywhere; font-size: 14px; color: var(--fg-1); background: var(--ai-purple-bg); border-left: 3px solid var(--ai-purple); border-radius: 5px; padding: 8px 10px; }
-      .changed-review-field { background:var(--changed-bg) !important; box-shadow:-4px 0 0 var(--changed-bar); }
+      .changed-review-field { box-shadow:none; }
+      .review-summary.changed-review-field { background:var(--ai-purple-bg) !important; }
+      .review-reason.changed-review-field { background:transparent !important; }
       .review-summary span { display: block; margin-bottom: 4px; color: var(--fg-2); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
       .review-summary .review-changed-badge { margin:0 0 6px; width:max-content; }
       .review-summary p { margin: 0; line-height: 1.42; }
@@ -6348,6 +6473,10 @@ def dashboard_review_page(target: Path, title: str, text: str, base_style: str) 
       .learning-impact p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.45; }
       .review-summary, .review-reason, .source-snippet, .quality-gates, .evidence-preview, .review-meta { user-select: text; -webkit-user-select: text; }
       .review-action { margin-top: 10px; display: grid; gap: 8px; }
+      .review-why { border:1px solid var(--status-warning-bg); border-radius:6px; background:var(--status-warning-soft-bg); padding:8px 10px; color:var(--fg-2); }
+      .review-why h3 { margin:0 0 5px; color:var(--status-warning); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; }
+      .review-why ul { margin:0; padding-left:17px; display:grid; gap:3px; }
+      .review-why li { margin:0; font-size:12px; line-height:1.4; }
       .review-context { margin-top: 10px; min-width: 0; }
       .review-meta { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
       blockquote { margin: 8px 0; border-left: 3px solid var(--border-muted); padding: 6px 10px; color: var(--fg-2); background: #fff; font-size: 13px; line-height: 1.45; }
@@ -6636,6 +6765,18 @@ DASHBOARD_HTML = r"""<!doctype html>
     .onboarding-stage { display:grid; grid-template-columns:92px 1fr auto; gap:8px; align-items:center; min-height:26px; font-size:11px; color:var(--fg-2); }
     .onboarding-stage strong { font-size:11px; color:var(--fg-2); }
     .onboarding-stage .bar { height:6px; }
+    .onboarding-tabs { display:flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:7px; overflow-x:auto; }
+    .onboarding-tab { height:28px; flex:0 0 auto; border:1px solid transparent; border-radius:999px; background:transparent; color:var(--fg-3); padding:0 11px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }
+    .onboarding-tab:hover { color:var(--fg-1); background:var(--bg-2); }
+    .onboarding-tab.active { color:var(--ai-purple-dark); border-color:rgba(124,58,237,.24); background:var(--ai-purple-bg); }
+    .onboarding-tab-panel { display:none; }
+    .onboarding-tab-panel.active { display:grid; gap:12px; }
+    .onboarding[data-onboarding-active] .onboarding-card[data-onboarding-section] { display:none; }
+    .onboarding[data-onboarding-active="flow"] .onboarding-card[data-onboarding-section="flow"],
+    .onboarding[data-onboarding-active="folders"] .onboarding-card[data-onboarding-section="folders"],
+    .onboarding[data-onboarding-active="reviews"] .onboarding-card[data-onboarding-section="reviews"],
+    .onboarding[data-onboarding-active="ai"] .onboarding-card[data-onboarding-section="ai"],
+    .onboarding[data-onboarding-active="setup"] .onboarding-card[data-onboarding-section="setup"] { display:grid; }
     .onboarding-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
     .onboarding-card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:var(--shadow-small-bottom); padding:14px; min-width:0; display:grid; gap:10px; align-content:start; }
     .onboarding-card h3 { margin:0 0 8px; color:var(--fg-1); font-size:14px; line-height:1.25; }
@@ -6644,6 +6785,29 @@ DASHBOARD_HTML = r"""<!doctype html>
     .onboarding-card li + li { margin-top:5px; }
     .onboarding-card strong { color:var(--fg-1); }
     .onboarding-info-card { border-color:rgba(61,116,255,.2); background:linear-gradient(180deg, #fff 0%, #F7FAFF 100%); }
+    .onboarding-flow-card { grid-column:1 / -1; padding:16px; }
+    .pipeline-flow { position:relative; display:grid; gap:10px; }
+    .pipeline-flow::before { content:""; position:absolute; left:15px; top:22px; bottom:22px; width:2px; border-radius:999px; background:linear-gradient(180deg, rgba(61,116,255,.25), rgba(124,58,237,.28), rgba(0,148,75,.25)); }
+    .pipeline-flow-row { position:relative; display:grid; grid-template-columns:32px 170px 1fr auto; gap:12px; align-items:start; min-height:54px; padding:10px 12px 10px 0; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 1px 0 rgba(31,41,55,.03); }
+    .pipeline-flow-number { position:relative; z-index:1; width:32px; height:32px; border:1px solid var(--line); border-radius:999px; background:#fff; color:var(--fg-2); display:grid; place-items:center; font-size:12px; font-weight:800; }
+    .pipeline-flow-row.project .pipeline-flow-number { border-color:rgba(61,116,255,.25); color:var(--blue); background:#F2F6FF; }
+    .pipeline-flow-row.round .pipeline-flow-number { border-color:rgba(124,58,237,.25); color:var(--ai-purple); background:var(--ai-purple-bg); }
+    .pipeline-flow-row.review .pipeline-flow-number { border-color:var(--status-warning-bg); color:var(--status-warning); background:var(--status-warning-soft-bg); }
+    .pipeline-flow-row.output .pipeline-flow-number { border-color:var(--status-success-bg); color:var(--status-success); background:var(--status-success-soft-bg); }
+    .pipeline-flow-title { display:grid; gap:3px; min-width:0; }
+    .pipeline-flow-title strong { color:var(--fg-1); font-size:13px; line-height:1.25; }
+    .pipeline-flow-title span { color:var(--fg-3); font-size:11px; line-height:1.3; }
+    .pipeline-flow-detail { display:grid; gap:6px; min-width:0; }
+    .pipeline-flow-detail p { margin:0; color:var(--fg-2); font-size:12px; line-height:1.4; }
+    .pipeline-flow-tags { display:flex; gap:5px; flex-wrap:wrap; }
+    .pipeline-tag { min-height:20px; display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; background:var(--surface-subtle); color:var(--fg-2); padding:0 7px; font-size:10px; font-weight:750; white-space:nowrap; }
+    .pipeline-tag.blue { border-color:rgba(61,116,255,.2); color:var(--blue); background:#F2F6FF; }
+    .pipeline-tag.purple { border-color:rgba(124,58,237,.24); color:var(--ai-purple); background:var(--ai-purple-bg); }
+    .pipeline-tag.yellow { border-color:var(--status-warning-bg); color:var(--status-warning); background:var(--status-warning-soft-bg); }
+    .pipeline-tag.green { border-color:var(--status-success-bg); color:var(--status-success); background:var(--status-success-soft-bg); }
+    .pipeline-flow-action { justify-self:end; min-height:24px; display:inline-flex; align-items:center; border:1px solid rgba(124,58,237,.28); border-radius:999px; background:var(--ai-purple-bg); color:var(--ai-purple); padding:0 9px; font-size:11px; font-weight:800; white-space:nowrap; }
+    .pipeline-flow-action.review { border-color:var(--status-warning-bg); background:var(--status-warning-soft-bg); color:var(--status-warning); }
+    .pipeline-flow-action.output { border-color:var(--status-success-bg); background:var(--status-success-soft-bg); color:var(--status-success); }
     .onboarding-sidebar-demo { display:grid; grid-template-columns:52px 1fr; gap:12px; align-items:center; }
     .demo-rail { width:46px; height:154px; border:1px solid var(--line); border-radius:14px; background:#fff; overflow:hidden; display:flex; flex-direction:column; box-shadow:var(--shadow-small-bottom); }
     .demo-tab { height:34px; display:grid; place-items:center; border-bottom:1px solid var(--line); color:var(--fg-3); }
@@ -6903,6 +7067,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       .learning-context-points { grid-template-columns:1fr; }
       .onboarding-grid { grid-template-columns:1fr; }
       .onboarding-hero { grid-template-columns:1fr; }
+      .pipeline-flow-row { grid-template-columns:32px 1fr; padding:10px; }
+      .pipeline-flow-detail { grid-column:2; }
+      .pipeline-flow-action { grid-column:2; justify-self:start; }
       .update-meta-grid { grid-template-columns:1fr; }
       .row { grid-template-columns: 28px 1fr; }
       .project > .row { grid-template-columns: 28px 44px 1fr; }
@@ -7314,13 +7481,17 @@ DASHBOARD_HTML = r"""<!doctype html>
         : `${plural(deliverableReviews, "deliverable item")} to review`;
       const outputLabel = reviews ? reviewLabel : (missingDeliverables ? `${plural(missingDeliverables, "deliverable")} to prepare` : (deliverables ? `${plural(deliverables, "deliverable")}` : "not started"));
       return {
-        status: reviews ? "yellow" : (deliverables ? "green" : "gray"),
+        status: reviews || missingDeliverables ? "yellow" : (deliverables ? "green" : "gray"),
         label: outputLabel,
         action: {
           label: "Check output",
           button_label: "Check output",
           copy_label: "check output",
-          instruction: reviews ? "Output is waiting for review decisions or deliverable notes before any final artefact should be exported or shared." : "Output has two steps: draft reviewable Markdown, then export or finalize the approved deliverable artefact.",
+          instruction: reviews
+            ? "Output is waiting for review decisions or deliverable notes before any final artefact should be exported or shared."
+            : (missingDeliverables
+              ? "Synthesis is accepted. You can now use Check output to prepare the next reviewable deliverable Markdown."
+              : "All configured deliverables are prepared. Use each deliverable card to review, copy or export the approved artefact."),
           prompt: `Check Output for this Research OS round in Codex/Cowork: ${round.path}. First read Research OS/08-looped-learning/active-learnings.md and apply any active Looped Learnings. ${lensInstruction(round)} Do not call APIs, do not run local stubs, and do not use backend deliverable generation. Use the round's actual deliverables folder from status.json or the filesystem; in the clean folder structure this is usually 02-output-deliverables. If synthesis reviews are still open, or if any active deliverable section is not marked Yes/Looks good without comments, tell me what blocks output. History entries in .deliverable-reviews.json are previous review rounds and should not block output. If active deliverable review notes exist, read .deliverable-reviews.json and apply completed notes directly to the Markdown deliverable. Add a history entry for the review round you processed, but preserve sections marked Looks good with no notes unless you changed their content. Sections whose content changes should be reviewed again; unchanged approved sections should stay ready with only an Edit option in the UI. Deliverables must follow this lifecycle: draft reviewable Markdown source -> user reviews Markdown -> iterate until every active section is Looks good with no notes -> export or finalize the approved artefact. If no research summary Markdown exists yet, create only research-summary.md first. Do not generate the other Markdown deliverables in the same pass. After the research summary is reviewed/accepted with every section Yes/Looks good and no comments, use a second explicit prompt to draft the remaining Markdown deliverables: design actions summary, PowerPoint preparation prompt and stakeholder Slack message. After any Markdown deliverable is fully approved, use its explicit export/finalize prompt to make the final artefact, such as PDF for research summary or design brief.`
         }
       };
@@ -7549,7 +7720,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         : `<span class="phase-status green">${dot("green")}Researcher-controlled knowledge pipeline</span>`;
       const introAction = empty ? `<div class="onboarding-actions">${setupAction}${action}</div>` : "";
       const intro = `<section class="onboarding-hero"><div><h2>${introTitle}</h2><p>${introCopy}</p>${introAction}${introStatus}</div>${miniDashboard}</section>`;
-      const sidebarHint = empty ? `<section class="onboarding-card onboarding-info-card">
+      const sidebarHint = empty ? `<section class="onboarding-card onboarding-info-card" data-onboarding-section="setup">
             <h3>Find these basics later</h3>
             <div class="onboarding-sidebar-demo">
               <div class="demo-rail" aria-hidden="true">
@@ -7574,11 +7745,86 @@ DASHBOARD_HTML = r"""<!doctype html>
             </ol>`
         : `<div class="onboarding-actions">${setupAction}</div>
             <p>Use this prompt when you set up Research OS for the first time, or when you want Codex or Claude to re-orient itself in this workspace. After that, use the dashboard actions for projects, rounds, input, synthesis and output.</p>`;
-      return `<div class="onboarding">
+      return `<div class="onboarding" data-onboarding-active="flow">
         ${intro}
+        <div class="onboarding-tabs" role="tablist" aria-label="Info sections">
+          <button class="onboarding-tab active" type="button" data-onboarding-tab="flow">Flow</button>
+          <button class="onboarding-tab" type="button" data-onboarding-tab="folders">Folders</button>
+          <button class="onboarding-tab" type="button" data-onboarding-tab="reviews">Reviews</button>
+          <button class="onboarding-tab" type="button" data-onboarding-tab="ai">AI prompts</button>
+          <button class="onboarding-tab" type="button" data-onboarding-tab="setup">Setup</button>
+        </div>
         <div class="onboarding-grid">
+          <section class="onboarding-card onboarding-flow-card" data-onboarding-section="flow">
+            <h3>Typical Research OS flow</h3>
+            <div class="pipeline-flow">
+              <div class="pipeline-flow-row project">
+                <div class="pipeline-flow-number">1</div>
+                <div class="pipeline-flow-title"><strong>Create project</strong><span>Long-running product area</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Create a project for the topic you want to keep learning about over time.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag blue">project folder</span><span class="pipeline-tag">02-rounds</span></div>
+                </div>
+                <div class="pipeline-flow-action">Create project</div>
+              </div>
+              <div class="pipeline-flow-row project">
+                <div class="pipeline-flow-number">2</div>
+                <div class="pipeline-flow-title"><strong>Add project background</strong><span>Context for future rounds</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Add durable material such as strategy docs, product notes, stakeholder input or earlier research archives.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag blue">01-input-source-files</span><span class="pipeline-tag yellow">review context proposals</span></div>
+                </div>
+                <div class="pipeline-flow-action">Process context</div>
+              </div>
+              <div class="pipeline-flow-row round">
+                <div class="pipeline-flow-number">3</div>
+                <div class="pipeline-flow-title"><strong>Create round</strong><span>One study or synthesis cycle</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Create a round when you have a concrete research activity, interview batch, evaluation or concept test.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag purple">research lens</span><span class="pipeline-tag">round background</span></div>
+                </div>
+                <div class="pipeline-flow-action">Create round</div>
+              </div>
+              <div class="pipeline-flow-row round">
+                <div class="pipeline-flow-number">4</div>
+                <div class="pipeline-flow-title"><strong>Add round input</strong><span>Source files for this round</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Add transcripts, notes, recordings, screenshots, surveys or setup context that belong to this specific round.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag blue">01-input-source-files</span><span class="pipeline-tag">sources stay intact</span></div>
+                </div>
+                <div class="pipeline-flow-action">Run input</div>
+              </div>
+              <div class="pipeline-flow-row round">
+                <div class="pipeline-flow-number">5</div>
+                <div class="pipeline-flow-title"><strong>Extract evidence</strong><span>AI work files</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>The AI turns source material into traceable source representations and evidence observations.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag green">evidence</span><span class="pipeline-tag">source traceability</span><span class="pipeline-tag">00-ai-work-files</span></div>
+                </div>
+                <div class="pipeline-flow-action">Run input</div>
+              </div>
+              <div class="pipeline-flow-row review">
+                <div class="pipeline-flow-number">6</div>
+                <div class="pipeline-flow-title"><strong>Synthesize and review</strong><span>Repeat stage by stage</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Run synthesis to create patterns, insights and recommendations. Review yellow items, add notes, then rerun the prompt when changes are needed.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag yellow">review queue</span><span class="pipeline-tag purple">Run synthesis</span><span class="pipeline-tag green">accepted knowledge</span></div>
+                </div>
+                <div class="pipeline-flow-action review">Review</div>
+              </div>
+              <div class="pipeline-flow-row output">
+                <div class="pipeline-flow-number">7</div>
+                <div class="pipeline-flow-title"><strong>Create deliverables</strong><span>Output from accepted knowledge</span></div>
+                <div class="pipeline-flow-detail">
+                  <p>Prepare a summary, design brief, deck prompt, Slack message or post-it notes. Review the draft first, then finalize or export.</p>
+                  <div class="pipeline-flow-tags"><span class="pipeline-tag green">02-output-deliverables</span><span class="pipeline-tag yellow">review Markdown</span><span class="pipeline-tag purple">final artifact</span></div>
+                </div>
+                <div class="pipeline-flow-action output">Create output</div>
+              </div>
+            </div>
+          </section>
           ${sidebarHint}
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="folders">
             <h3>How the workspace is organized</h3>
             <div class="onboarding-folder-card">
               <div class="onboarding-folder-row"><span class="dot blue"></span><strong>Project</strong><span>long-running topic</span></div>
@@ -7588,7 +7834,7 @@ DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <p>Projects are long-running product areas or topics. Rounds are individual studies, interview batches, evaluations or synthesis cycles inside a project.</p>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="folders">
             <h3>What you can put in input folders</h3>
             <div class="onboarding-pill-list">
               <span class="onboarding-pill">project context</span>
@@ -7602,7 +7848,7 @@ DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <p>Use project input for durable background. Use round input for material from a specific study.</p>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="flow">
             <h3>How the pipeline works</h3>
             <div class="onboarding-mini-dashboard">
               <div class="onboarding-stage"><strong>Sources</strong><div class="bar"><span class="fill blue only" style="width:100%"></span></div><span>input</span></div>
@@ -7613,7 +7859,7 @@ DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <p>The AI moves one safe stage at a time. Evidence stays source-faithful; you review the synthesis layers before they feed deliverables.</p>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="reviews">
             <h3>How reviews work</h3>
             <div class="onboarding-visual">
               <div class="review-screen-demo" aria-hidden="true">
@@ -7637,7 +7883,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>You keep iterating until the active review items are accepted.</li>
             </ol>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="reviews">
             <h3>How deliverables work</h3>
             <div class="onboarding-visual">
               <div class="onboarding-flow">
@@ -7654,7 +7900,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Only then create the final output, such as a PDF, copy-ready message or deck preparation prompt.</li>
             </ol>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="ai">
             <h3>How the purple AI buttons work</h3>
             <div class="onboarding-actions">${info({
               label: "Example AI prompt",
@@ -7671,7 +7917,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Refresh the dashboard, then review anything marked yellow.</li>
             </ol>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="ai">
             <h3>How Looped Learning works</h3>
             <div class="onboarding-visual">
               <div class="learning-loop-demo">
@@ -7689,7 +7935,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Approved learnings become active instructions for later AI prompts.</li>
             </ol>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="setup">
             <h3>Add Research OS to your Dock</h3>
             <div class="onboarding-visual dock-demo" aria-hidden="true">
               <div class="dock-window">
@@ -7708,7 +7954,7 @@ DASHBOARD_HTML = r"""<!doctype html>
               <li>Name it Research OS and confirm.</li>
             </ol>
           </section>
-          <section class="onboarding-card">
+          <section class="onboarding-card" data-onboarding-section="setup">
             <h3>What to do now</h3>
             ${setupStep}
           </section>
@@ -7971,6 +8217,13 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.getElementById("aboutPanel").innerHTML = onboardingBasics("tab");
       document.getElementById("settingsPanel").innerHTML = renderSettings(payload.settings || {});
       setActiveTab(activeTab);
+      document.querySelectorAll("[data-onboarding-tab]").forEach(button => button.addEventListener("click", event => {
+        event.preventDefault();
+        const tab = button.getAttribute("data-onboarding-tab") || "flow";
+        const onboarding = button.closest(".onboarding");
+        if (onboarding) onboarding.setAttribute("data-onboarding-active", tab);
+        document.querySelectorAll("[data-onboarding-tab]").forEach(item => item.classList.toggle("active", item.getAttribute("data-onboarding-tab") === tab));
+      }));
       document.querySelectorAll("[data-toggle]").forEach(button => button.addEventListener("click", () => { const id = button.getAttribute("data-toggle"); const container = button.closest(".project-info-section, .project, .round"); saveOpen(id, !container.classList.contains("open")); render(lastPayload); }));
       function closeTips() {
         document.querySelectorAll(".tip-open").forEach(item => item.classList.remove("tip-open"));
@@ -8166,12 +8419,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       document.querySelectorAll("[data-settings-tab]").forEach(button => button.addEventListener("click", event => {
         event.preventDefault();
         const tab = button.getAttribute("data-settings-tab") || "general";
-        localStorage.setItem("research-os-settings-tab", tab);
         document.querySelectorAll("[data-settings-tab]").forEach(item => item.classList.toggle("active", item.getAttribute("data-settings-tab") === tab));
         document.querySelectorAll("[data-settings-panel]").forEach(panel => panel.classList.toggle("active", panel.getAttribute("data-settings-panel") === tab));
       }));
-      const savedSettingsTab = localStorage.getItem("research-os-settings-tab") || "general";
-      document.querySelector(`[data-settings-tab="${savedSettingsTab}"]`)?.click();
+      document.querySelector(`[data-settings-tab="general"]`)?.click();
       const saveSettings = async statusId => {
         const status = document.getElementById(statusId);
         const payload = {
